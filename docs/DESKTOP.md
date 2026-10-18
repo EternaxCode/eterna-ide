@@ -75,3 +75,7 @@ node scripts/native-smoke.mjs
 사용자 요청에 따라 양쪽 기본 권한은 전체 액세스입니다. Codex에는 `--dangerously-bypass-approvals-and-sandbox`, Claude에는 `--dangerously-skip-permissions`를 전달합니다. 제한 모드로 바꾸면 Codex 채팅은 read-only, Codex 터미널은 workspace-write/on-request, Claude는 manual로 실행합니다. OS의 폴더 접근 권한이나 관리자 정책을 변경하는 설정은 아닙니다.
 
 근거: https://learn.chatgpt.com/docs/app-server#list-models-modellist / https://code.claude.com/docs/en/model-config 및 설치된 공식 CLI 메타데이터.
+
+## 작업 시간 제한
+
+AI 코딩 작업과 공식 터미널은 최대 2시간 실행할 수 있으며 언제든 중단할 수 있습니다. 로컬 테스트 명령은 기존 2분 제한을 유지합니다. v0.3.2 이전 AI 채팅에는 3분 제한이 있어 빌드·검증 도중 중단될 수 있었습니다. 시간 초과는 파일 변경을 되돌리지 않으므로, 이전 작업의 로그와 변경 내용을 확인하고 이어서 요청하세요.

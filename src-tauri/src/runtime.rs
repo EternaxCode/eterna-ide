@@ -19,6 +19,17 @@ type ResultValue = Result<Value, String>;
 type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
 const OUTPUT_LIMIT: usize = 60_000;
 const STREAM_LIMIT: usize = 20_000_000;
+// Coding agents may build and retry tests; the old 180-second chat budget killed healthy work.
+// Keep the same bounded two-hour budget as official coding terminals. Local tests stay bounded.
+fn run_time_limit(kind: &str) -> Duration {
+    Duration::from_secs(if kind == "test" { 120 } else { 7200 })
+}
+fn run_timed_out(kind: &str, elapsed: Duration) -> bool {
+    elapsed > run_time_limit(kind)
+}
+fn timeout_message(kind: &str) -> String {
+    format!("{} 실행 시간 제한({}분)에 도달해 중단했습니다. 이미 기록된 출력과 파일 변경은 유지됩니다. 로그를 확인한 뒤 이어서 작업을 요청하세요.", if kind == "test" {"테스트"} else {"AI 작업"}, run_time_limit(kind).as_secs()/60)
+}
 #[derive(Clone)]
 pub struct Runtime {
     inner: Arc<Inner>,
@@ -722,9 +733,7 @@ impl Runtime {
             if reason.is_empty() {
                 reason = if stop.load(Ordering::SeqCst) {
                     "cancelled"
-                } else if start.elapsed()
-                    > Duration::from_secs(if kind == "test" { 120 } else { 180 })
-                {
+                } else if run_timed_out(&kind, start.elapsed()) {
                     "timed_out"
                 } else if bytes > STREAM_LIMIT || line.len() > 2_000_000 {
                     "output_limit"
@@ -781,7 +790,7 @@ impl Runtime {
             failure(&format!("{error} {output}"))
         };
         if let Ok(mut s) = self.inner.store.lock() {
-            let _=s.update("run",&id,json!({"answer":answer,"output":output,"status":status,"error":if good{Value::Null}else{json!(if error.is_empty(){format!("{status}: 실행 로그를 확인하세요.")}else{error})},"exitCode":exited.and_then(|s|s.code()),"finishedAt":chrono::Utc::now().to_rfc3339()}));
+            let _=s.update("run",&id,json!({"answer":answer,"output":output,"status":status,"error":if status=="completed"{Value::Null}else{json!(if status=="timed_out"{timeout_message(&kind)}else if error.is_empty(){format!("{status}: 실행 로그를 확인하세요.")}else{error})},"exitCode":exited.and_then(|s|s.code()),"finishedAt":chrono::Utc::now().to_rfc3339()}));
         }
         self.event(
             &id,
@@ -1476,6 +1485,15 @@ fn shell_command(script: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn coding_build_and_test_retry_survive_three_minutes_but_remain_bounded() {
+        assert!(!run_timed_out("ai", Duration::from_secs(181)));
+        assert!(!run_timed_out("ai", Duration::from_secs(7199)));
+        assert!(run_timed_out("ai", Duration::from_secs(7201)));
+        assert!(run_timed_out("test", Duration::from_secs(121)));
+        assert!(timeout_message("ai").contains("120분"));
+        assert!(timeout_message("test").contains("2분"));
+    }
     #[test]
     #[ignore = "requires installed official CLIs; metadata only, no inference"]
     fn live_model_discovery() {
