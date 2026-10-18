@@ -700,11 +700,13 @@ impl Runtime {
         let mut bytes = 0;
         let start = Instant::now();
         let mut pulse = Instant::now();
+        let mut output_changed = false;
         let mut reason = String::new();
         let mut exited = None;
         loop {
             match rx.recv_timeout(Duration::from_millis(30)) {
                 Ok((stderr, data)) => {
+                    output_changed = true;
                     bytes += data.len();
                     if stderr || kind == "test" {
                         tail_append(&mut output, &String::from_utf8_lossy(&data), OUTPUT_LIMIT);
@@ -763,8 +765,14 @@ impl Runtime {
                 }
             }
             if pulse.elapsed() > Duration::from_millis(500) {
-                if let Ok(mut s) = self.inner.store.lock() {
-                    let _ = s.update("run", &id, json!({"answer":answer,"output":output}));
+                if output_changed {
+                    if let Ok(mut s) = self.inner.store.lock() {
+                        if s.update("run", &id, json!({"answer":answer,"output":output}))
+                            .is_ok()
+                        {
+                            output_changed = false;
+                        }
+                    }
                 }
                 pulse = Instant::now();
             }
@@ -1509,6 +1517,35 @@ mod tests {
             assert!(!c.to_string().contains("subscriptionType"));
             println!("{id}: {} models", c["models"].as_array().unwrap().len());
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn quiet_running_process_does_not_rewrite_unchanged_run_bodies() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir(&project_dir).unwrap();
+        let store = Arc::new(Mutex::new(Store::open(&dir.path().join("data")).unwrap()));
+        let p = store
+            .lock()
+            .unwrap()
+            .api(
+                "POST",
+                "/projects",
+                json!({"name":"quiet","path":project_dir}),
+            )
+            .unwrap();
+        let rt = Runtime::new(store.clone(), None, Arc::new(|_, _| {}));
+        let run = rt
+            .start("test", json!({"projectId":p["id"],"command":"sleep 3"}))
+            .unwrap();
+        let before = store.lock().unwrap().get(strv(&run, "id"), "run").unwrap()["version"].clone();
+        thread::sleep(Duration::from_millis(1100));
+        assert_eq!(
+            store.lock().unwrap().get(strv(&run, "id"), "run").unwrap()["version"],
+            before
+        );
+        rt.cancel(strv(&run, "id")).unwrap();
+        rt.shutdown();
     }
     #[test]
     fn observable_events_exclude_private_reasoning() {

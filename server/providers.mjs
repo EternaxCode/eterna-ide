@@ -20,12 +20,12 @@ export class Runner {
  if([...this.active.values()].some(x=>x.projectId===project.id))throw Object.assign(new Error('이 프로젝트에서 이미 실행 중입니다. 먼저 중단하거나 기다려주세요.'),{status:409});
  const run=this.store.create('run',{projectId:project.id,goal,kind,provider:kind==='ai'?'codex':'local',status:'running',answer:'',output:'',context:context??null,command,events:[]});
  const child=spawn(kind==='ai'?codexBinary:(process.platform==='darwin'?'/bin/zsh':'/bin/sh'),kind==='ai'?codexArgs(model,{effort,permission}):['-c',command],{cwd:project.path,env:cleanEnv(),detached:true,stdio:['pipe','pipe','pipe']});
- const entry={child,projectId:project.id,reason:null};this.active.set(run.id,entry);let answer='',output='',line='',events=[],exitError='',success=false;let ended=false;
- const flush=()=>{if(!ended)this.store.update('run',run.id,{answer,output,events:events.slice(-80)});};
+ const entry={child,projectId:project.id,reason:null};this.active.set(run.id,entry);let answer='',output='',line='',events=[],exitError='',success=false;let ended=false,dirtyOutput=false;
+ const flush=()=>{if(!ended&&dirtyOutput){this.store.update('run',run.id,{answer,output,events:events.slice(-80)});dirtyOutput=false;}};
  const timer=setTimeout(()=>this.stop(run.id,'timed_out'),runTimeLimitMs(kind));const pulse=setInterval(flush,500);
  const eventLine=text=>{try{const e=JSON.parse(text);if(e.type==='item.completed'&&e.item?.type==='agent_message')answer+=(answer?'\n\n':'')+e.item.text;if(e.type==='turn.completed')success=true;if(e.type==='turn.failed'||e.type==='error')exitError=e.error?.message||e.message||'AI 실행 실패';if(['turn.started','turn.completed','turn.failed','error'].includes(e.type))events.push({type:e.type,at:new Date().toISOString()});}catch{output=(output+text+'\n').slice(-60000);}};
- child.stdout.on('data',data=>{if(kind==='test'){output=(output+data.toString()).slice(-60000);return;}line+=data;const parts=line.split('\n');line=parts.pop();for(const l of parts)eventLine(l);if(line.length>2e6)this.stop(run.id,'output_limit');});
- child.stderr.on('data',data=>{output=(output+data.toString()).slice(-60000);});
+ child.stdout.on('data',data=>{dirtyOutput=true;if(kind==='test'){output=(output+data.toString()).slice(-60000);return;}line+=data;const parts=line.split('\n');line=parts.pop();for(const l of parts)eventLine(l);if(line.length>2e6)this.stop(run.id,'output_limit');});
+ child.stderr.on('data',data=>{dirtyOutput=true;output=(output+data.toString()).slice(-60000);});
  const finish=(code,error)=>{if(ended)return;if(line)eventLine(line);clearTimeout(timer);clearInterval(pulse);ended=true;this.active.delete(run.id);const message=error||exitError;const status=entry.reason||(code===0&&(kind==='test'||success&&!message)?'completed':classifyFailure(message+' '+output));this.store.update('run',run.id,{answer,output,events:events.slice(-80),status,exitCode:code,finishedAt:new Date().toISOString(),error:status==='completed'?null:status==='timed_out'?timeoutMessage(kind):message||`${status}: 실행 로그를 확인하세요.`});};
  child.on('error',e=>finish(null,e.message));child.on('close',code=>finish(code));child.stdin.end(kind==='ai'?context.prompt:undefined);return run;
  }
