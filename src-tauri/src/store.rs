@@ -1421,7 +1421,9 @@ impl Store {
         let method = method.to_ascii_uppercase();
         match (method.as_str(), parts.as_slice()) {
             ("GET", ["state"]) => {
-                let notes = self.refresh_notes()?;
+                // State polling reads persisted metadata only. Source provenance is
+                // checked by context/search before use, never by background polling.
+                let notes = self.all("note")?;
                 let count: i64 = self
                     .db
                     .query_row("SELECT count(*) FROM records WHERE type='run'", [], |r| {
