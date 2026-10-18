@@ -4,7 +4,7 @@
 
 ## 시작
 
-macOS, Node.js 24.2 이상, Git이 필요합니다. `Eterna IDE.command`를 더블클릭하면 설치·빌드 후 브라우저가 열립니다.
+macOS, Node.js 24.2 이상, Git이 필요합니다. 레거시 웹판은 `Nexus IDE.command`를 사용합니다. 새 `Eterna IDE.command`는 설치된 데스크톱 앱을 엽니다.
 
 ```sh
 npm ci
