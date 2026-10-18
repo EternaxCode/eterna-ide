@@ -6,3 +6,5 @@ test('automated Codex execution is read-only and avoids user-config integrations
 test('quota and auth errors remain distinct from generic failure',()=>{assert.equal(classifyFailure('usage limit reached'),'limited');assert.equal(classifyFailure('not logged in'),'auth_required');assert.equal(classifyFailure('unknown error'),'failed');});
 
 test("full access is the default for both providers and forwards effort",async()=>{const {selectionFlags}=await import("../server/models.mjs");assert(codexArgs("m",{effort:"high"}).includes("--dangerously-bypass-approvals-and-sandbox"));assert(selectionFlags("claude",{model:"opus",effort:"max"}).includes("--dangerously-skip-permissions"));assert.deepEqual(selectionFlags("claude",{model:"opus",effort:"max"}).slice(-4),["--model","opus","--effort","max"]);});
+
+test('AI coding gets the terminal two-hour budget while local tests remain two minutes',async()=>{const {runTimeLimitMs,timeoutMessage}=await import('../server/providers.mjs');assert.equal(runTimeLimitMs('ai'),7200000);assert.equal(runTimeLimitMs('test'),120000);assert.match(timeoutMessage('ai'),/120분/);assert.match(timeoutMessage('test'),/2분/);});
