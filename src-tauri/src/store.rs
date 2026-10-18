@@ -68,6 +68,8 @@ fn blocked(s: &str) -> bool {
         ".venv",
         "venv",
         "vendor",
+        "target",
+        ".turbo",
         ".ssh",
         ".aws",
         ".codex",
@@ -247,7 +249,7 @@ impl Store {
             file_hashes: HashMap::new(),
         };
         let interrupted: Vec<String> = {
-            let mut q=s.db.prepare("SELECT id FROM records WHERE type='run' AND json_extract(data,'$.status')='running'").map_err(err)?;
+            let mut q=s.db.prepare("SELECT id FROM records WHERE type='run' AND json_extract(data,'$.status') IN ('starting','running')").map_err(err)?;
             let rows = q.query_map([], |row| row.get(0)).map_err(err)?;
             rows.collect::<std::result::Result<_, _>>().map_err(err)?
         };
@@ -889,7 +891,7 @@ impl Store {
         Ok(json!({"ok":true}))
     }
     fn workspace_idle(&self, id: &str) -> Result<()> {
-        let active:bool=self.db.query_row("SELECT EXISTS(SELECT 1 FROM records WHERE type='run' AND json_extract(data,'$.workspaceId')=?1 AND json_extract(data,'$.status')='running')",[id],|r|r.get(0)).map_err(err)?;
+        let active:bool=self.db.query_row("SELECT EXISTS(SELECT 1 FROM records WHERE type='run' AND json_extract(data,'$.workspaceId')=?1 AND json_extract(data,'$.status') IN ('starting','running'))",[id],|r|r.get(0)).map_err(err)?;
         if active {
             return Err("실행 중인 작업 사본은 보관하거나 복원할 수 없습니다.".into());
         }
@@ -919,6 +921,8 @@ impl Store {
                         "artifacts",
                         "node_modules",
                         "vendor",
+                        "target",
+                        ".turbo",
                         ".venv",
                         "venv",
                     ]
@@ -926,6 +930,51 @@ impl Store {
             })
         {
             return Err(format!("보관할 수 없는 경로입니다: {}", name));
+        }
+        Ok(())
+    }
+    fn disposable_git(root: &Path) -> Result<()> {
+        let git = root.join(".git");
+        let metadata = match fs::symlink_metadata(&git) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(err(e)),
+        };
+        let refuse = || {
+            "Git 커밋·스테이시·인덱스 또는 연결된 저장소 기록이 있어 자동 보관/가져오기를 중단했습니다. 기록을 포함한 Git 저장소 이전은 아직 지원하지 않습니다. 원본은 보존됩니다.".to_string()
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(refuse());
+        }
+        for marker in [
+            "index",
+            "packed-refs",
+            "shallow",
+            "MERGE_HEAD",
+            "FETCH_HEAD",
+            "ORIG_HEAD",
+            "commondir",
+            "gitdir",
+        ] {
+            if git.join(marker).exists() {
+                return Err(refuse());
+            }
+        }
+        for name in ["objects", "refs", "logs", "modules", "worktrees"] {
+            let location = git.join(name);
+            if !location.exists() {
+                continue;
+            }
+            for item in walkdir::WalkDir::new(location).follow_links(false) {
+                let entry = item.map_err(err)?;
+                if entry.file_type().is_file() || entry.file_type().is_symlink() {
+                    return Err(refuse());
+                }
+            }
+        }
+        let head = fs::read_to_string(git.join("HEAD")).map_err(|_| refuse())?;
+        if !head.trim().starts_with("ref: refs/heads/") {
+            return Err(refuse());
         }
         Ok(())
     }
@@ -1011,11 +1060,13 @@ impl Store {
         if folder == native || !folder.starts_with(&native) {
             return Err("앱이 소유한 네이티브 작업 사본만 보관할 수 있습니다.".into());
         }
+        Self::disposable_git(&folder)?;
         let manifest = self.capture_archive(&folder)?;
         // Re-scan detects file additions, deletions, mode changes and edits during capture.
         if self.capture_archive(&folder)? != manifest {
             return Err("보관 중 작업 사본이 변경되었습니다. 다시 시도하세요.".into());
         }
+        Self::disposable_git(&folder)?;
         self.update("workspace",id,json!({"archived":true,"archiveState":"archived","materialized":true,"archiveManifest":manifest,"archivedAt":now()}))?;
         let remove = fs::remove_dir_all(&folder);
         let materialized = folder.exists();
@@ -1199,6 +1250,9 @@ impl Store {
         let mut counts = BTreeMap::<String, usize>::new();
         for (id, kind, raw) in records {
             let value: Value = serde_json::from_str(&raw).map_err(err)?;
+            if kind == "run" && ["starting", "running"].contains(&text(&value, "status")) {
+                return Err("기존 앱에 시작 중이거나 실행 중인 작업이 있어 가져오기를 중단했습니다. 기존 앱에서 작업을 완료·취소하거나 앱을 다시 열어 중단 상태로 복구한 뒤 가져오세요. 원본은 보존됩니다.".into());
+            }
             if text(&value, "id") != id || !value.is_object() {
                 return Err("레코드 ID 또는 형식이 올바르지 않습니다.".into());
             }
@@ -1232,6 +1286,7 @@ impl Store {
                     if !old_root.is_dir() {
                         return Err("기존 작업 사본 폴더가 없어 복원할 수 없습니다.".into());
                     }
+                    Self::disposable_git(&old_root)?;
                     let folder = self
                         .root
                         .join("workspaces")
@@ -1246,7 +1301,10 @@ impl Store {
                     for entry in walkdir::WalkDir::new(&old_root)
                         .follow_links(false)
                         .into_iter()
-                        .filter_entry(|entry| entry.depth() == 0 || entry.file_name() != ".git")
+                        .filter_entry(|entry| {
+                            entry.depth() == 0
+                                || !(entry.depth() == 1 && entry.file_name() == ".git")
+                        })
                     {
                         let entry = entry.map_err(err)?;
                         if entry.depth() == 0 {
@@ -1276,6 +1334,8 @@ impl Store {
                                         "artifacts",
                                         "node_modules",
                                         "vendor",
+                                        "target",
+                                        ".turbo",
                                         ".venv",
                                         "venv",
                                     ]
@@ -1312,6 +1372,7 @@ impl Store {
                         }
                         workspace_files += 1;
                     }
+                    Self::disposable_git(&old_root)?;
                     let _ = std::process::Command::new("git")
                         .args(["init", "-q"])
                         .arg(&folder)
@@ -1934,6 +1995,157 @@ mod tests {
             )
             .is_err());
         assert!(Path::new(text(&p, "path")).join("한글.txt").exists());
+    }
+    #[test]
+    fn git_commit_and_stash_are_never_discarded_by_archive_or_import() {
+        let (d, mut s, p) = fixture();
+        let w = s
+            .api("POST", "/workspaces", json!({"projectId":p["id"]}))
+            .unwrap();
+        let id = text(&w, "id");
+        let root = Path::new(text(&w, "path"));
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args([
+                    "-c",
+                    "user.name=Eterna Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .arg("-c")
+                .arg(format!(
+                    "core.hooksPath={}",
+                    d.path().join("no-hooks").display()
+                ))
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", d.path().join("no-global-config"))
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["add", "한글.txt"]);
+        git(&["commit", "-m", "fixture commit"]);
+        assert!(s
+            .api("POST", &format!("/workspaces/{id}/archive"), Value::Null)
+            .unwrap_err()
+            .contains("Git 커밋"));
+        assert!(root.join(".git/HEAD").is_file());
+        fs::write(root.join("한글.txt"), "스테이시에만 남은 변경").unwrap();
+        git(&["stash", "push", "-m", "preserve fixture"]);
+        assert!(s
+            .api("POST", &format!("/workspaces/{id}/archive"), Value::Null)
+            .unwrap_err()
+            .contains("Git 커밋"));
+        assert!(root.join(".git/refs/stash").is_file());
+        let legacy = d.path().join("git-history.sqlite");
+        let db = Connection::open(&legacy).unwrap();
+        db.execute_batch("CREATE TABLE records(id TEXT PRIMARY KEY,type TEXT,data TEXT)")
+            .unwrap();
+        let imported = json!({"id":"git-history","path":root,"baseline":{}});
+        db.execute(
+            "INSERT INTO records VALUES('git-history','workspace',?1)",
+            [imported.to_string()],
+        )
+        .unwrap();
+        drop(db);
+        let before = fs::read(&legacy).unwrap();
+        assert!(s
+            .api("POST", "/import", json!({"path":legacy}))
+            .unwrap_err()
+            .contains("Git 커밋"));
+        assert!(s.get("git-history", "workspace").is_err());
+        assert_eq!(fs::read(&legacy).unwrap(), before);
+        assert!(root.join(".git/refs/stash").is_file());
+    }
+    #[test]
+    fn source_browser_skips_rust_build_cache_but_archive_preserves_it() {
+        let (_d, mut s, p) = fixture();
+        let root = Path::new(text(&p, "path"));
+        fs::create_dir_all(root.join("src-tauri/target/debug")).unwrap();
+        fs::write(root.join("src-tauri/target/debug/output"), "build").unwrap();
+        assert!(!list_files(root)
+            .unwrap()
+            .iter()
+            .any(|n| n.contains("target")));
+        let w = s
+            .api("POST", "/workspaces", json!({"projectId":p["id"]}))
+            .unwrap();
+        let copy = Path::new(text(&w, "path"));
+        fs::create_dir_all(copy.join("target")).unwrap();
+        fs::write(copy.join("target/output"), "must preserve").unwrap();
+        let a = s
+            .api(
+                "POST",
+                &format!("/workspaces/{}/archive", text(&w, "id")),
+                Value::Null,
+            )
+            .unwrap();
+        assert!(a["archiveManifest"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| text(f, "path") == "target/output"));
+    }
+    #[test]
+    fn import_rejects_active_legacy_runs_without_partial_records_or_source_changes() {
+        for status in ["starting", "running"] {
+            let (d, mut s, _p) = fixture();
+            let legacy = d.path().join("active.sqlite");
+            let db = Connection::open(&legacy).unwrap();
+            db.execute_batch("CREATE TABLE records(id TEXT PRIMARY KEY,type TEXT,data TEXT)")
+                .unwrap();
+            let note = json!({"id":"before-active","body":"앞선 기록"});
+            let run = json!({"id":"active-run","status":status});
+            for (kind, value) in [("note", note), ("run", run)] {
+                db.execute(
+                    "INSERT INTO records VALUES(?1,?2,?3)",
+                    params![text(&value, "id"), kind, value.to_string()],
+                )
+                .unwrap();
+            }
+            drop(db);
+            let before = fs::read(&legacy).unwrap();
+            let error = s
+                .api("POST", "/import", json!({"path":legacy}))
+                .unwrap_err();
+            assert!(error.contains("기존 앱"));
+            assert!(error.contains("완료·취소"));
+            assert!(s.get("before-active", "note").is_err());
+            assert!(s.get("active-run", "run").is_err());
+            assert_eq!(fs::read(&legacy).unwrap(), before);
+        }
+    }
+    #[test]
+    fn starting_run_blocks_archive_and_recovers_as_interrupted() {
+        let (d, mut s, p) = fixture();
+        let w = s
+            .api("POST", "/workspaces", json!({"projectId":p["id"]}))
+            .unwrap();
+        let r = s
+            .create("run", json!({"workspaceId":w["id"],"status":"starting"}))
+            .unwrap();
+        assert!(s
+            .api(
+                "POST",
+                &format!("/workspaces/{}/archive", text(&w, "id")),
+                Value::Null
+            )
+            .is_err());
+        drop(s);
+        let reopened = Store::open(&d.path().join("native")).unwrap();
+        assert_eq!(
+            reopened.get(text(&r, "id"), "run").unwrap()["status"],
+            "interrupted"
+        );
     }
     #[cfg(unix)]
     #[test]

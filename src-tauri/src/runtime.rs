@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc, Arc, Mutex,
     },
     thread,
@@ -31,6 +31,7 @@ struct Inner {
     tickets: Mutex<HashMap<String, Ticket>>,
     opening: Mutex<HashMap<String, Arc<AtomicBool>>>,
     shutting_down: AtomicBool,
+    pty_closers: Arc<AtomicUsize>,
     terminals: Mutex<HashMap<String, Terminal>>,
 }
 struct Active {
@@ -43,10 +44,9 @@ struct Ticket {
     provider: String,
     action: String,
     cwd: PathBuf,
-    project: String,
-    context: Value,
     workspace: Value,
     model: String,
+    run_id: Option<String>,
 }
 struct Terminal {
     pid: Option<u32>,
@@ -195,10 +195,22 @@ fn kill_tree(pid: u32) {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill.exe")
+        if let Ok(mut killer) = Command::new("taskkill.exe")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .creation_flags_no_window()
-            .status();
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                if killer.try_wait().ok().flatten().is_some() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            let _ = killer.kill();
+        }
     }
 }
 #[cfg(windows)]
@@ -240,6 +252,61 @@ fn spawn_reader<R: Read + Send + 'static>(
             }
         }
     });
+}
+// ConPTY can retain its output pipe until ClosePseudoConsole completes. Keep draining
+// even after the consumer leaves; never make a bounded channel prevent native teardown.
+fn spawn_pty_reader(mut reader: Box<dyn Read + Send>, tx: mpsc::SyncSender<(bool, Vec<u8>)>) {
+    thread::spawn(move || {
+        let mut buffer = [0; 8192];
+        let mut deliver = true;
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if deliver && tx.send((false, buffer[..n].to_vec())).is_err() {
+                        deliver = false;
+                    }
+                }
+            }
+        }
+    });
+}
+fn close_pty(
+    master: Box<dyn MasterPty + Send>,
+    writer: Option<Box<dyn Write + Send>>,
+    tracker: Option<Arc<AtomicUsize>>,
+) -> mpsc::Receiver<()> {
+    let (tx, rx) = mpsc::channel();
+    // Microsoft requires draining output concurrently with ClosePseudoConsole on
+    // Windows before build 26100. portable-pty invokes it synchronously in Drop.
+    // https://learn.microsoft.com/en-us/windows/console/closepseudoconsole
+    if let Some(tracker) = &tracker {
+        tracker.fetch_add(1, Ordering::SeqCst);
+    }
+    thread::spawn(move || {
+        drop(writer);
+        drop(master);
+        if let Some(tracker) = tracker {
+            tracker.fetch_sub(1, Ordering::SeqCst);
+        }
+        let _ = tx.send(());
+    });
+    rx
+}
+fn bounded_pty_wait(
+    child: &mut Box<dyn portable_pty::Child + Send + Sync>,
+    timeout: Duration,
+) -> Option<u32> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Some(status.exit_code());
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 fn capture(bin: &Path, args: &[&str], timeout: Duration) -> Result<(bool, String), String> {
     capture_cancellable(bin, args, timeout, None)
@@ -339,6 +406,7 @@ impl Runtime {
                 tickets: Mutex::new(HashMap::new()),
                 opening: Mutex::new(HashMap::new()),
                 shutting_down: AtomicBool::new(false),
+                pty_closers: Arc::new(AtomicUsize::new(0)),
                 terminals: Mutex::new(HashMap::new()),
             }),
         }
@@ -758,7 +826,9 @@ impl Runtime {
         }
         let project = required(&body, "projectId")?;
         let mut tickets = self.inner.tickets.lock().map_err(lock_error)?;
-        tickets.retain(|_, t| t.created.elapsed() < Duration::from_secs(30));
+        if self.inner.shutting_down.load(Ordering::SeqCst) {
+            return Err("앱이 종료 중입니다.".into());
+        }
         if tickets.len() >= 30 {
             return Err("터미널 요청이 너무 많습니다.".into());
         }
@@ -806,22 +876,63 @@ impl Runtime {
                 .and_then(|mut f| f.write_all(strv(&context, "prompt").as_bytes()))
                 .map_err(|e| e.to_string())?;
         }
+        // The workspace and its durable reservation become visible under the same Store lock.
+        let run_id = if action == "work" {
+            let run=s.create("run",json!({"projectId":project,"kind":"terminal","provider":provider,"status":"starting","goal":context["goal"],"contextId":context["id"],"workspaceId":workspace["id"],"answer":"","output":"공식 CLI 터미널 준비 중. 내부 도구 호출은 관측되지 않음."}))?;
+            Some(required(&run, "id")?)
+        } else {
+            None
+        };
         let ticket = uuid::Uuid::new_v4().to_string();
         let result = json!({"ticket":ticket,"contextId":context["id"],"workspace":if workspace.is_null(){Value::Null}else{json!({"id":workspace["id"],"skipped":workspace["skipped"]})}});
         tickets.insert(
-            ticket,
+            ticket.clone(),
             Ticket {
                 created: Instant::now(),
                 provider,
                 action,
                 cwd,
-                project,
-                context,
                 workspace,
                 model: strv(&body, "model").into(),
+                run_id,
             },
         );
+        let weak = Arc::downgrade(&self.inner);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(30));
+            if let Some(inner) = weak.upgrade() {
+                Runtime { inner }.expire_ticket(&ticket);
+            }
+        });
         Ok(result)
+    }
+    fn finish_pending_run(&self, run_id: Option<&str>, status: &str, error: &str) {
+        if let Some(id) = run_id {
+            if let Ok(mut store) = self.inner.store.lock() {
+                let _=store.update("run",id,json!({"status":status,"error":error,"finishedAt":chrono::Utc::now().to_rfc3339()}));
+            }
+        }
+    }
+    fn expire_ticket(&self, ticket: &str) {
+        let expired = if let Ok(mut tickets) = self.inner.tickets.lock() {
+            if tickets
+                .get(ticket)
+                .is_some_and(|t| t.created.elapsed() >= Duration::from_secs(30))
+            {
+                tickets.remove(ticket)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(t) = expired {
+            self.finish_pending_run(
+                t.run_id.as_deref(),
+                "cancelled",
+                "터미널 요청이 만료되었습니다.",
+            );
+        }
     }
     pub fn open_terminal(&self, ticket: &str) -> ResultValue {
         let stop = Arc::new(AtomicBool::new(false));
@@ -835,20 +946,39 @@ impl Runtime {
             }
             opening.insert(ticket.to_owned(), stop.clone());
         }
-        let result = self.open_reserved_terminal(ticket, stop);
+        let result = (|| {
+            let t = self
+                .inner
+                .tickets
+                .lock()
+                .map_err(lock_error)?
+                .remove(ticket)
+                .ok_or("터미널 요청이 없거나 이미 사용되었습니다.")?;
+            let run_id = t.run_id.clone();
+            let result = self.open_reserved_terminal(ticket, t, stop.clone());
+            if let Err(error) = &result {
+                let status = if self.inner.shutting_down.load(Ordering::SeqCst) {
+                    "interrupted"
+                } else if stop.load(Ordering::SeqCst) || error.contains("만료") {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                self.finish_pending_run(run_id.as_deref(), status, error);
+            }
+            result
+        })();
         if let Ok(mut opening) = self.inner.opening.lock() {
             opening.remove(ticket);
         }
         result
     }
-    fn open_reserved_terminal(&self, ticket: &str, stop: Arc<AtomicBool>) -> ResultValue {
-        let t = self
-            .inner
-            .tickets
-            .lock()
-            .map_err(lock_error)?
-            .remove(ticket)
-            .ok_or("터미널 요청이 없거나 이미 사용되었습니다.")?;
+    fn open_reserved_terminal(
+        &self,
+        ticket: &str,
+        t: Ticket,
+        stop: Arc<AtomicBool>,
+    ) -> ResultValue {
         if t.created.elapsed() > Duration::from_secs(30) {
             return Err("터미널 요청이 만료되었습니다.".into());
         }
@@ -923,6 +1053,16 @@ impl Runtime {
         if stop.load(Ordering::SeqCst) || self.inner.shutting_down.load(Ordering::SeqCst) {
             return Err("터미널 열기가 취소되었습니다.".into());
         }
+        let id = t.run_id.clone();
+        if let Some(id) = &id {
+            let mut store = self.inner.store.lock().map_err(lock_error)?;
+            let workspace = store.get(strv(&t.workspace, "id"), "workspace")?;
+            if workspace["archived"] == true || strv(&workspace, "path") != t.cwd.to_string_lossy()
+            {
+                return Err("작업 사본 상태가 변경되었습니다. 새 터미널을 준비하세요.".into());
+            }
+            store.update("run",id,json!({"status":"running","output":"공식 CLI 터미널 세션. 내부 도구 호출은 관측되지 않음. 화면 출력은 자동 저장하지 않습니다."}))?;
+        }
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 28,
@@ -931,29 +1071,37 @@ impl Runtime {
                 pixel_height: 0,
             })
             .map_err(|e| e.to_string())?;
-        let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-        drop(pair.slave);
-        let streams = pair
-            .master
-            .try_clone_reader()
-            .and_then(|reader| pair.master.take_writer().map(|writer| (reader, writer)));
-        let (reader, writer) = match streams {
-            Ok(v) => v,
-            Err(e) => {
-                if let Some(pid) = child.process_id() {
-                    kill_tree(pid)
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(e.to_string());
+        let reader = match pair.master.try_clone_reader() {
+            Ok(reader) => reader,
+            Err(error) => {
+                drop(pair.slave);
+                close_pty(pair.master, None, Some(self.inner.pty_closers.clone()));
+                return Err(error.to_string());
             }
         };
-        let run = if t.action == "work" {
-            match self.inner.store.lock().map_err(lock_error)?.create("run",json!({"projectId":t.project,"kind":"terminal","provider":t.provider,"status":"running","goal":t.context["goal"],"contextId":t.context["id"],"workspaceId":t.workspace["id"],"answer":"","output":"공식 CLI 터미널 세션. 내부 도구 호출은 관측되지 않음. 화면 출력은 자동 저장하지 않습니다."})){Ok(v)=>Some(v),Err(e)=>{if let Some(pid)=child.process_id(){kill_tree(pid)}let _=child.kill();let _=child.wait();return Err(e)}}
-        } else {
-            None
+        let (tx, rx) = mpsc::sync_channel(32);
+        spawn_pty_reader(reader, tx);
+        let writer = match pair.master.take_writer() {
+            Ok(writer) => writer,
+            Err(error) => {
+                drop(pair.slave);
+                close_pty(pair.master, None, Some(self.inner.pty_closers.clone()));
+                return Err(error.to_string());
+            }
         };
-        let id = run.as_ref().map(|r| strv(r, "id").to_string());
+        let mut child = match pair.slave.spawn_command(cmd) {
+            Ok(child) => child,
+            Err(error) => {
+                drop(pair.slave);
+                close_pty(
+                    pair.master,
+                    Some(writer),
+                    Some(self.inner.pty_closers.clone()),
+                );
+                return Err(error.to_string());
+            }
+        };
+        drop(pair.slave);
         if let Some(id) = &id {
             self.event(
                 id,
@@ -972,8 +1120,6 @@ impl Runtime {
             },
         );
         drop(opening_guard);
-        let (tx, rx) = mpsc::sync_channel(32);
-        spawn_reader(reader, tx, false);
         let rt = self.clone();
         let ticket = ticket.to_string();
         thread::spawn(move || {
@@ -981,6 +1127,11 @@ impl Runtime {
             let mut bytes = 0;
             let mut ended = None;
             let mut utf8 = Vec::new();
+            let mut closing: Option<mpsc::Receiver<()>> = None;
+            let mut closing_started = None;
+            let mut output_eof = false;
+            let mut close_done = false;
+            let mut teardown_error = false;
             loop {
                 match rx.recv_timeout(Duration::from_millis(30)) {
                     Ok((_, data)) => {
@@ -1007,16 +1158,15 @@ impl Runtime {
                         }
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        if ended.is_some() {
-                            break;
-                        }
+                        output_eof = true;
+                        thread::sleep(Duration::from_millis(10));
                     }
                     _ => {}
                 }
-                if stop.load(Ordering::SeqCst)
+                let stopping = stop.load(Ordering::SeqCst)
                     || bytes > STREAM_LIMIT
-                    || start.elapsed() > Duration::from_secs(7200)
-                {
+                    || start.elapsed() > Duration::from_secs(7200);
+                if stopping && closing_started.is_none() {
                     if let Some(pid) = child.process_id() {
                         kill_tree(pid)
                     }
@@ -1037,10 +1187,58 @@ impl Runtime {
                         _ => {}
                     }
                 }
+                if closing_started.is_none() && (ended.is_some() || stopping) {
+                    let terminal = rt
+                        .inner
+                        .terminals
+                        .lock()
+                        .ok()
+                        .and_then(|mut ts| ts.remove(&ticket));
+                    if let Some(t) = terminal {
+                        closing = Some(close_pty(
+                            t.master,
+                            Some(t.writer),
+                            Some(rt.inner.pty_closers.clone()),
+                        ));
+                    } else {
+                        close_done = true;
+                    }
+                    closing_started = Some(Instant::now());
+                }
+                if let Some(done) = &closing {
+                    if done.try_recv().is_ok() {
+                        close_done = true;
+                    }
+                }
+                if ended.is_some() && output_eof && close_done {
+                    break;
+                }
+                if closing_started.is_some_and(|at| at.elapsed() > Duration::from_secs(5)) {
+                    if let Some(pid) = child.process_id() {
+                        kill_tree(pid);
+                    }
+                    let _ = child.kill();
+                    if ended.is_none() {
+                        ended = bounded_pty_wait(&mut child, Duration::from_millis(250));
+                    }
+                    teardown_error = true;
+                    break;
+                }
             }
             if let Some(id) = id {
                 if let Ok(mut s) = rt.inner.store.lock() {
-                    let _=s.update("run",&id,json!({"status":if stop.load(Ordering::SeqCst){"cancelled"}else{"session_ended"},"exitCode":ended,"finishedAt":chrono::Utc::now().to_rfc3339()}));
+                    let status = if teardown_error {
+                        if ended.is_none() {
+                            "running"
+                        } else {
+                            "failed"
+                        }
+                    } else if stop.load(Ordering::SeqCst) {
+                        "cancelled"
+                    } else {
+                        "session_ended"
+                    };
+                    let _=s.update("run",&id,json!({"status":status,"error":if teardown_error{Some("터미널 종료 확인이 시간 제한을 초과했습니다. 실행 기록을 확인하세요.")}else{None},"exitCode":ended,"finishedAt":chrono::Utc::now().to_rfc3339()}));
                 }
                 rt.event(
                     &id,
@@ -1048,9 +1246,6 @@ impl Runtime {
                     "공식 터미널 세션이 종료되었습니다.",
                     json!([]),
                 );
-            }
-            if let Ok(mut ts) = rt.inner.terminals.lock() {
-                ts.remove(&ticket);
             }
             (rt.inner.emit)(
                 "eterna-terminal",
@@ -1096,11 +1291,19 @@ impl Runtime {
                 kill_tree(pid);
             }
         }
-        self.inner
+        let pending = self
+            .inner
             .tickets
             .lock()
             .map_err(lock_error)?
             .remove(ticket);
+        if let Some(t) = pending {
+            self.finish_pending_run(
+                t.run_id.as_deref(),
+                "cancelled",
+                "터미널 열기가 취소되었습니다.",
+            );
+        }
         Ok(json!({"ok":true}))
     }
     pub fn shutdown(&self) {
@@ -1125,6 +1328,19 @@ impl Runtime {
                 }
             }
         }
+        let pending: Vec<Ticket> = self
+            .inner
+            .tickets
+            .lock()
+            .map(|mut tickets| tickets.drain().map(|(_, t)| t).collect())
+            .unwrap_or_default();
+        for t in pending {
+            self.finish_pending_run(
+                t.run_id.as_deref(),
+                "interrupted",
+                "앱 종료로 터미널 준비가 중단되었습니다.",
+            );
+        }
         // Give cancellable preflight helpers time to reap before the desktop event loop exits.
         let until = Instant::now() + Duration::from_millis(500);
         while Instant::now() < until {
@@ -1134,6 +1350,13 @@ impl Runtime {
                 .lock()
                 .map(|p| p.is_empty())
                 .unwrap_or(true)
+                && self
+                    .inner
+                    .terminals
+                    .lock()
+                    .map(|ts| ts.is_empty())
+                    .unwrap_or(true)
+                && self.inner.pty_closers.load(Ordering::SeqCst) == 0
             {
                 break;
             }
@@ -1273,6 +1496,33 @@ mod tests {
     }
     #[test]
     fn native_pty_can_launch_and_deliver_output() {
+        const CHILD_MARKER: &str = "ETERNA_NATIVE_PTY_WATCHDOG_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let executable = std::env::current_exe().unwrap();
+            let mut child = command(&executable)
+                .args([
+                    "--exact",
+                    "runtime::tests::native_pty_can_launch_and_deliver_output",
+                    "--nocapture",
+                ])
+                .env(CHILD_MARKER, "1")
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "PTY subprocess failed: {status}");
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    kill_tree(child.id());
+                    let _ = child.kill();
+                    panic!("PTY subprocess exceeded 20-second watchdog; see phase logs above");
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        eprintln!("pty phase: open");
         let pair = native_pty_system()
             .openpty(PtySize {
                 cols: 80,
@@ -1281,6 +1531,9 @@ mod tests {
                 pixel_height: 0,
             })
             .unwrap();
+        let (tx, rx) = mpsc::sync_channel(4);
+        spawn_pty_reader(pair.master.try_clone_reader().unwrap(), tx);
+        let mut writer = pair.master.take_writer().unwrap();
         #[cfg(unix)]
         let mut cmd = CommandBuilder::new("/bin/sh");
         #[cfg(unix)]
@@ -1289,26 +1542,58 @@ mod tests {
         let mut cmd = CommandBuilder::new("cmd.exe");
         #[cfg(windows)]
         cmd.args(["/D", "/C", "echo pty-native-result"]);
+        eprintln!("pty phase: spawn");
         let mut child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);
-        let (tx, rx) = mpsc::sync_channel(4);
-        spawn_reader(pair.master.try_clone_reader().unwrap(), tx, false);
         let start = Instant::now();
         let mut output = String::new();
-        while start.elapsed() < Duration::from_secs(3) {
-            if let Ok((_, data)) = rx.recv_timeout(Duration::from_millis(50)) {
+        while start.elapsed() < Duration::from_secs(5) {
+            if let Ok((_, data)) = rx.recv_timeout(Duration::from_millis(30)) {
                 output.push_str(&String::from_utf8_lossy(&data));
+                // portable-pty uses PSEUDOCONSOLE_INHERIT_CURSOR. This test has no
+                // xterm renderer, so answer the same cursor-position request ourselves.
+                if output.contains("\x1b[6n") {
+                    let _ = writer.write_all(b"\x1b[1;1R");
+                    let _ = writer.flush();
+                }
                 if output.contains("pty-native-result") {
                     break;
                 }
             }
         }
-        if let Some(pid) = child.process_id() {
-            kill_tree(pid)
+        eprintln!("pty phase: terminate; output={output:?}");
+        if child.try_wait().unwrap().is_none() {
+            if let Some(pid) = child.process_id() {
+                kill_tree(pid);
+            }
+            let _ = child.kill();
         }
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(output.contains("pty-native-result"));
+        // Start ClosePseudoConsole while output still has a live consumer. The
+        // consumer must continue until close returns, including its final output.
+        let closed = close_pty(pair.master, Some(writer), None);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut close_done = false;
+        let mut output_eof = false;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok((_, data)) => output.push_str(&String::from_utf8_lossy(&data)),
+                Err(mpsc::RecvTimeoutError::Disconnected) => output_eof = true,
+                _ => {}
+            }
+            if closed.try_recv().is_ok() {
+                close_done = true;
+            }
+            if close_done && output_eof {
+                break;
+            }
+        }
+        eprintln!("pty phase: closed={close_done}, output_eof={output_eof}");
+        let exit = bounded_pty_wait(&mut child, Duration::from_secs(2));
+        assert!(close_done, "native console close did not complete");
+        assert!(output_eof, "PTY output did not close");
+        assert!(exit.is_some(), "child did not exit");
+        assert!(output.contains("pty-native-result"), "output: {output:?}");
+        eprintln!("pty phase: complete");
     }
     #[cfg(unix)]
     #[test]
@@ -1394,10 +1679,9 @@ esac
                     provider: "codex".into(),
                     action: "work".into(),
                     cwd: dir.path().into(),
-                    project: "project".into(),
-                    context: json!({"id":"context"}),
                     workspace: json!({"id":"workspace"}),
                     model: String::new(),
+                    run_id: None,
                 },
             );
             let opener = rt.clone();
@@ -1420,6 +1704,227 @@ esac
             assert!(rt.inner.opening.lock().unwrap().is_empty());
             assert!(rt.inner.terminals.lock().unwrap().is_empty());
         }
+    }
+    #[cfg(unix)]
+    fn prepared_terminal_fixture() -> (tempfile::TempDir, Runtime, Value) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(project.join("file.txt"), "source").unwrap();
+        let bin = dir.path().join("fake-codex");
+        std::fs::write(
+            &bin,
+            r#"#!/bin/sh
+case "$1" in
+--version) echo codex-fixture; exit;;
+login) echo 'Logged in using ChatGPT'; exit;;
+esac
+base=$(dirname "$0")
+case " $* " in
+*" mcp "*) touch "$base/entered"
+while [ ! -f "$base/release" ]; do sleep 0.01; done
+echo '[]';;
+*) touch "$base/spawned";;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let store = Arc::new(Mutex::new(Store::open(&dir.path().join("data")).unwrap()));
+        let p = store
+            .lock()
+            .unwrap()
+            .api("POST", "/projects", json!({"name":"test","path":project}))
+            .unwrap();
+        let rt = Runtime::new(store, Some(bin), Arc::new(|_, _| {}));
+        let prepared = rt
+            .prepare_terminal(
+                json!({"provider":"codex","projectId":p["id"],"action":"work","goal":"검증"}),
+            )
+            .unwrap();
+        (dir, rt, prepared)
+    }
+    #[cfg(unix)]
+    #[test]
+    fn production_terminal_exit_closes_native_console_before_waiting_for_eof() {
+        let (dir, prepared_rt, prepared) = prepared_terminal_fixture();
+        std::fs::write(dir.path().join("release"), "").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let rt = Runtime::new(
+            prepared_rt.inner.store.clone(),
+            prepared_rt.inner.codex.clone(),
+            Arc::new(move |_, event| {
+                if event["closed"] == true {
+                    let _ = tx.send(event);
+                }
+            }),
+        );
+        let ticket = strv(&prepared, "ticket");
+        let pending = prepared_rt
+            .inner
+            .tickets
+            .lock()
+            .unwrap()
+            .remove(ticket)
+            .unwrap();
+        let id = pending.run_id.clone().unwrap();
+        rt.inner
+            .tickets
+            .lock()
+            .unwrap()
+            .insert(ticket.into(), pending);
+        rt.open_terminal(ticket).unwrap();
+        rx.recv_timeout(Duration::from_secs(8))
+            .expect("production terminal failed to close");
+        assert!(rt.inner.terminals.lock().unwrap().is_empty());
+        assert_eq!(
+            rt.inner.store.lock().unwrap().get(&id, "run").unwrap()["status"],
+            "session_ended"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn prepared_and_opening_terminal_reservations_block_archive_until_cancelled() {
+        let (dir, rt, prepared) = prepared_terminal_fixture();
+        let ticket = strv(&prepared, "ticket").to_owned();
+        let workspace = strv(&prepared["workspace"], "id");
+        let route = format!("/workspaces/{workspace}/archive");
+        let id = rt
+            .inner
+            .tickets
+            .lock()
+            .unwrap()
+            .get(&ticket)
+            .unwrap()
+            .run_id
+            .clone()
+            .unwrap();
+        assert_eq!(
+            rt.inner.store.lock().unwrap().get(&id, "run").unwrap()["status"],
+            "starting"
+        );
+        assert!(rt
+            .inner
+            .store
+            .lock()
+            .unwrap()
+            .api("POST", &route, Value::Null)
+            .is_err());
+        let opener = rt.clone();
+        let open_ticket = ticket.clone();
+        let handle = thread::spawn(move || opener.open_terminal(&open_ticket));
+        let start = Instant::now();
+        while !dir.path().join("entered").exists() {
+            assert!(start.elapsed() < Duration::from_secs(3));
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(rt
+            .inner
+            .store
+            .lock()
+            .unwrap()
+            .api("POST", &route, Value::Null)
+            .is_err());
+        rt.terminal_close(&ticket).unwrap();
+        let result = handle.join().unwrap();
+        assert!(result.is_err());
+        assert_eq!(
+            rt.inner.store.lock().unwrap().get(&id, "run").unwrap()["status"],
+            "cancelled"
+        );
+        assert!(!dir.path().join("spawned").exists());
+        assert_eq!(
+            rt.inner
+                .store
+                .lock()
+                .unwrap()
+                .api("POST", &route, Value::Null)
+                .unwrap()["archived"],
+            true
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn pending_ticket_expiry_and_shutdown_release_durable_reservations() {
+        for shutdown in [false, true] {
+            let (_dir, rt, prepared) = prepared_terminal_fixture();
+            let ticket = strv(&prepared, "ticket");
+            let id = rt
+                .inner
+                .tickets
+                .lock()
+                .unwrap()
+                .get(ticket)
+                .unwrap()
+                .run_id
+                .clone()
+                .unwrap();
+            if shutdown {
+                rt.shutdown();
+            } else {
+                rt.inner
+                    .tickets
+                    .lock()
+                    .unwrap()
+                    .get_mut(ticket)
+                    .unwrap()
+                    .created = Instant::now() - Duration::from_secs(31);
+                rt.expire_ticket(ticket);
+            }
+            let state = rt.inner.store.lock().unwrap().get(&id, "run").unwrap();
+            assert_eq!(
+                state["status"],
+                if shutdown { "interrupted" } else { "cancelled" }
+            );
+            assert!(rt.inner.tickets.lock().unwrap().is_empty());
+            let route = format!("/workspaces/{}/archive", strv(&prepared["workspace"], "id"));
+            assert!(rt
+                .inner
+                .store
+                .lock()
+                .unwrap()
+                .api("POST", &route, Value::Null)
+                .is_ok());
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn terminal_spawn_failure_finishes_existing_reservation() {
+        let (dir, rt, prepared) = prepared_terminal_fixture();
+        let ticket = strv(&prepared, "ticket").to_owned();
+        let id = rt
+            .inner
+            .tickets
+            .lock()
+            .unwrap()
+            .get(&ticket)
+            .unwrap()
+            .run_id
+            .clone()
+            .unwrap();
+        let opener = rt.clone();
+        let handle = thread::spawn(move || opener.open_terminal(&ticket));
+        let start = Instant::now();
+        while !dir.path().join("entered").exists() {
+            assert!(start.elapsed() < Duration::from_secs(3));
+            thread::sleep(Duration::from_millis(5));
+        }
+        std::fs::remove_file(dir.path().join("fake-codex")).unwrap();
+        std::fs::write(dir.path().join("release"), "").unwrap();
+        assert!(handle.join().unwrap().is_err());
+        assert_eq!(
+            rt.inner.store.lock().unwrap().get(&id, "run").unwrap()["status"],
+            "failed"
+        );
+        let route = format!("/workspaces/{}/archive", strv(&prepared["workspace"], "id"));
+        assert!(rt
+            .inner
+            .store
+            .lock()
+            .unwrap()
+            .api("POST", &route, Value::Null)
+            .is_ok());
     }
     #[test]
     fn windows_npm_shims_resolve_only_matching_native_payloads() {

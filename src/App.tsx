@@ -12,7 +12,7 @@ const statusLabel:Record<string,string>={candidate:'검토 전',verified:'확인
 function Load({children}:{children:React.ReactNode}){return <Suspense fallback={<div className="loading-panel" role="status">작업 도구를 불러오는 중…</div>}>{children}</Suspense>;}
 const empty:State={projects:[],notes:[],edges:[],runs:[]};
 const nav=[{id:'work',label:'작업실',icon:PanelLeft},{id:'knowledge',label:'지식 그래프',icon:Network},{id:'synapse',label:'Synapse · 실행 지도',icon:Link2},{id:'history',label:'실행 기록',icon:History},{id:'accounts',label:'모델 연결',icon:Settings2}];
-const runLabel:Record<string,string>={running:'실행 중',completed:'완료',failed:'실패',limited:'한도 도달',auth_required:'로그인 필요',cancelled:'중단됨',interrupted:'중단됨',timed_out:'시간 초과',session_ended:'세션 종료'};
+const runLabel:Record<string,string>={starting:'준비 중',running:'실행 중',completed:'완료',failed:'실패',limited:'한도 도달',auth_required:'로그인 필요',cancelled:'중단됨',interrupted:'중단됨',timed_out:'시간 초과',session_ended:'세션 종료'};
 export default function App(){
  const fileEpoch=useRef(0),historyLoading=useRef(false);
  const [loadingHistory,setLoadingHistory]=useState(false);
@@ -34,7 +34,7 @@ export default function App(){
  useEffect(()=>{refresh();loadProviders();const interval=setInterval(()=>{if(document.visibilityState==='visible')refresh();},2000);const visible=()=>{if(document.visibilityState==='visible')refresh();};document.addEventListener('visibilitychange',visible);return()=>{clearInterval(interval);document.removeEventListener('visibilitychange',visible);};},[refresh,loadProviders]);
  useEffect(()=>{let active=true;if(projectId){localStorage.setItem('nexus-project',projectId);setFiles([]);api('/projects/'+projectId+'/files').then(files=>{if(active)setFiles(files);}).catch(e=>{if(active)setError(String(e));});}return()=>{active=false;};},[projectId]);
  useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(''),3000);return()=>clearTimeout(t);}},[toast]);
- const currentRun=state.runs.find(r=>r.id===runId);const active=state.runs.find(r=>r.projectId===projectId&&r.status==='running');
+ const currentRun=state.runs.find(r=>r.id===runId);const active=state.runs.find(r=>r.projectId===projectId&&['running','starting'].includes(r.status));
  async function openFile(path:string,id=projectId){if(dirty&&!confirm('저장하지 않은 편집 내용을 버리고 파일을 열까요?'))return;const epoch=++fileEpoch.current;try{const f=await api(`/projects/${id}/file?path=${encodeURIComponent(path)}`);if(epoch!==fileEpoch.current)return;setFile({...f,projectId:id});setContent(f.content);setProjectId(id);setDiff(false);setPage('work');}catch(e){setError((e as Error).message);}}
  async function save(){if(!file)return;const epoch=fileEpoch.current;const id=file.projectId;try{const f=await api('/projects/'+id+'/file',{path:file.path,content,hash:file.hash},'PUT');if(epoch!==fileEpoch.current)return;setFile({...f,projectId:id});setDiff(false);setToast('파일을 저장했습니다.');refresh();}catch(e){setError((e as Error).message);}}
  useEffect(()=>{const handler=(e:KeyboardEvent)=>{if((e.metaKey||e.ctrlKey)&&e.key==='s'){e.preventDefault();save();}};window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);});

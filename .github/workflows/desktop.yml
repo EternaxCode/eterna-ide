@@ -27,7 +27,9 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run test:synapse
-      - run: npm run test:native
+      - name: Native core and PTY tests
+        timeout-minutes: 8
+        run: npm run test:native
       - if: runner.os == 'Windows'
         run: npm run desktop:build -- --bundles nsis
       - if: runner.os == 'macOS'

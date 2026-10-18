@@ -4,7 +4,7 @@
 
 **Your models change. Your knowledge stays.**
 
-A local AI workspace that connects code, decisions, evidence, and official coding-agent terminals.
+A native Windows/macOS AI workspace that connects code, decisions, evidence, and official coding-agent terminals.
 
 [![CI](https://github.com/EternaxCode/eterna-ide/actions/workflows/ci.yml/badge.svg)](https://github.com/EternaxCode/eterna-ide/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-536f5c.svg)](LICENSE)
@@ -24,35 +24,40 @@ A local AI workspace that connects code, decisions, evidence, and official codin
 - **Keep an execution trail:** local tests, exit codes, context snapshots, interruption status, and persistent history.
 - **Use official authentication:** bundled official Codex CLI with ChatGPT login, and installed official Claude Code in an integrated terminal. No extracted OAuth tokens or silent API-key fallback.
 
-## Quick start
+## Install the desktop app
 
-Requires **macOS, Node.js 24.2+, and Git**. Claude Code is optional. Linux CI validates core/browser behavior; interactive desktop support is currently macOS-first.
+Download the macOS Apple Silicon DMG or Windows x64 installer from [GitHub Releases](https://github.com/EternaxCode/eterna-ide/releases). Desktop builds use Tauri 2 and Rust; **Node.js and a localhost server are not required to run the app**. Official AI CLIs and your project's development tools are separate installations.
+
+The 0.3 beta is not Apple Developer ID notarized or commercially Windows-signed. macOS is tested on a real Mac; Windows validation uses installation and native renderer smoke tests in CI. Intel Mac and Windows ARM packages are not currently offered.
+
+1. Select a project using the native folder picker.
+2. Import existing `.data/nexus.sqlite` from **모델 연결 → 기존 데이터 가져오기**. The original stays untouched.
+3. Open a file, inspect the context preview, and ask GPT a question.
+4. Use the official coding terminal in a source snapshot, then review changes before applying them.
+5. Open **Synapse · 실행 지도** to explore actual execution events and their Korean descriptions.
+
+The interface is currently Korean. [Desktop guide](docs/DESKTOP.md) · [Legacy web guide](docs/README.ko.md).
+
+For source development:
 
 ```sh
 git clone https://github.com/EternaxCode/eterna-ide.git
 cd eterna-ide
 npm ci
-npm run launch
+npm run desktop:dev
 ```
 
-Or double-click **Eterna IDE.command** after cloning. The launcher builds and opens a local authenticated browser session. The app listens only on `127.0.0.1:4317`.
-
-1. Add a project using its absolute folder path.
-2. Open a file, inspect the context preview, and ask GPT a question.
-3. For edits, open **코딩 터미널** (coding terminal), then review changes before applying them.
-4. Save decisions and lessons in the knowledge graph.
-
-The interface is currently Korean. An English UI is not yet included.
+Native development additionally requires the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/). The original web application remains available with `npm run launch`.
 
 ## Connect your subscription
 
-**GPT / Codex:** use **모델 연결** (model connections) to start the official login. Existing ChatGPT authentication is recognized. The app includes the official Codex CLI without replacing a globally installed copy. The current default model is `gpt-6.1-sol`; availability depends on your account, and the model can be changed in settings.
+**GPT / Codex:** use **모델 연결** (model connections) to start the official login. Existing ChatGPT authentication is recognized. The desktop app reuses an installed official native CLI and does not copy credentials. An empty model setting uses the CLI default; availability depends on your account. The legacy web runner includes its own official CLI package.
 
 **Claude Code:** install the [official CLI](https://code.claude.com/docs/en/overview), then use the account-login terminal. Claude runs interactively with its own permission prompts. It reads the same context bundle as GPT, but its terminal output is not automatically ingested into memory; save selected conclusions explicitly.
 
 Subscription limits and billing settings belong to the providers. Eterna does **not** rotate accounts to bypass limits, copy authentication tokens, or silently fall back to paid API calls. Real Claude inference requires your completed login and was not part of the original author's live verification.
 
-## Performance, measured
+## Performance, measured (web baseline)
 
 The performance work targets local UI and data handling, not the model's inference speed. The reproducible fixture uses 500 knowledge records and 400 runs with 100KB contexts each. See the [report and raw results](docs/performance/README.md) for before/after measurements and limitations.
 
@@ -60,7 +65,7 @@ Heavy editor, language, graph, and terminal modules load on demand. Run summarie
 
 ## Data and boundaries
 
-Local state lives in `.data/`. The legacy database filename `nexus.sqlite`, storage keys, and `NEXUS_*` environment variables remain compatible with the initial prototype. Back up the database using a SQLite-aware backup or stop the server before copying the whole data directory. Do not commit or share this directory or launch URLs.
+Desktop state lives in the OS app-data folder shown in the app. Legacy web state lives in `.data/`. The legacy database filename `nexus.sqlite`, storage keys, and `NEXUS_*` environment variables remain compatible with the initial prototype. Back up the database using a SQLite-aware backup or stop the server before copying the whole data directory. Do not commit or share this directory or launch URLs.
 
 Snapshots support text source files up to 512KB each, fewer than 2,000 files, and 20MB total. Dependencies, secrets, symlinks, and binary assets are excluded. A source snapshot is **not an OS security sandbox**. Official CLI permissions still apply; user-triggered test commands run on the host with the user's privileges.
 
@@ -82,6 +87,8 @@ npm run benchmark
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [MIT license](LICENSE). Built by [EternaxCode](https://github.com/EternaxCode).
 
-## Native desktop preview (0.3)
+![Native Synapse execution view](docs/images/native-synapse.png)
+
+## Native memory and Synapse
 
 A Tauri/Rust desktop build is available for macOS Apple Silicon and Windows x64. It runs without the local Node server, retains the same UI, adds read-only legacy import into a separate CAS/Zstd-backed store, source-snapshot archival/restoration, and an actual-event 3D Synapse timeline. See [Desktop installation and operation](docs/DESKTOP.md). Official AI tools remain separate installations. Package verification does not imply Apple notarization or Windows commercial signing.

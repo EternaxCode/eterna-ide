@@ -2,7 +2,7 @@ import { readdirSync, lstatSync, realpathSync, readFileSync, writeFileSync, rena
 import { resolve, relative, isAbsolute, join, dirname, basename } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 export const hash=text=>createHash('sha256').update(text).digest('hex');
-const excluded=new Set(['node_modules','.git','.data','dist','build','.next','.venv','venv','vendor','.ssh','.aws','.codex','.claude','.nexus','coverage','artifacts']);
+const excluded=new Set(['node_modules','target','.turbo','.git','.data','dist','build','.next','.venv','venv','vendor','.ssh','.aws','.codex','.claude','.nexus','coverage','artifacts']);
 export const blocked=name=>excluded.has(name)||/^\.env(?:\.|$)/i.test(name)||/\.(pem|key|p12|pfx|sqlite|db)(-|$)/i.test(name)||/^(auth\.json|credentials.*|id_rsa|id_ed25519|\.npmrc|\.pypirc)$/i.test(name);
 export function safePath(root,name){
  if(typeof name!=='string'||!name||isAbsolute(name)||name.includes('\0')||name.split(/[\\/]/).some(p=>p==='..'||blocked(p)))throw new Error('허용되지 않는 파일 경로입니다.');
