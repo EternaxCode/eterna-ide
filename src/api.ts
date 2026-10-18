@@ -19,10 +19,10 @@ export function api(path:string,body?:unknown,method?:string):Promise<any>{
  return request(path,body,method);
 }
 export function download(filename:string,content:string){if(native){import('@tauri-apps/api/core').then(({invoke})=>invoke('save_export',{filename,content})).catch(e=>alert(String(e)));return;}const url=URL.createObjectURL(new Blob([content],{type:'text/markdown;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-export type Project={id:string;name:string;path:string};
-export type Note={id:string;projectId:string;title:string;body:string;kind:string;status:string;shared:boolean;pinned?:boolean;sourceRunId?:string;sourcePath?:string;sourceHash?:string;version:number;author:string;updatedAt:string};
+export type Project={id:string;name:string;path:string;template?:string;verificationCommand?:string};
+export type Note={id:string;projectId:string;title:string;body:string;kind:string;status:string;shared:boolean;pinned?:boolean;archived?:boolean;automatic?:boolean;reportSource?:string;sourceRunIds?:string[];sourceRunId?:string;sourcePath?:string;sourceHash?:string;version:number;author:string;updatedAt:string};
 export type Edge={id:string;from:string;to:string;label:string};
-export type Run={id:string;projectId:string;goal:string;kind:string;provider:string;status:string;answer:string;output:string;error?:string;createdAt:string;exitCode?:number;contextId?:string;workspaceId?:string;answerTruncated?:boolean};
+export type Run={id:string;projectId:string;goal:string;kind:string;provider:string;status:string;answer:string;output:string;error?:string;createdAt:string;exitCode?:number;contextId?:string;workspaceId?:string;answerTruncated?:boolean;memoryCapture?:{status:string;source:string;noteIds:string[];report?:string;error?:string}};
 export type State={projects:Project[];notes:Note[];edges:Edge[];runs:Run[];runCount?:number;workspaces?:{id:string;projectId:string;path:string;createdAt:string;skipped:string[]}[]};
 export type Provider={id:string;installed:boolean;connected:boolean;label:string;version?:string};
 window.addEventListener('hashchange',()=>{const token=new URLSearchParams(location.hash.slice(1)).get('token');if(token){sessionStorage.setItem('nexus-token',token);history.replaceState(null,'',location.pathname);location.reload();}});

@@ -12,6 +12,8 @@ use std::{
 use uuid::Uuid;
 
 mod context;
+mod learning;
+mod projects;
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_FILE: usize = 512 * 1024;
@@ -37,7 +39,9 @@ fn materialized_prompt(bundle: &Value) -> String {
     }
     format!(
         "{}{}\n</shared_context>",
-        if bundle["contextVersion"] == 2 {
+        if bundle["contextVersion"] == 3 {
+            learning::CONTEXT_PREFIX_V3
+        } else if bundle["contextVersion"] == 2 {
             CONTEXT_PREFIX
         } else {
             LEGACY_CONTEXT_PREFIX
@@ -366,7 +370,8 @@ impl Store {
                     .get("prompt")
                     .and_then(Value::as_str)
                     .is_some_and(|prompt| {
-                        (prompt.starts_with(CONTEXT_PREFIX)
+                        (prompt.starts_with(learning::CONTEXT_PREFIX_V3)
+                            || prompt.starts_with(CONTEXT_PREFIX)
                             || prompt.starts_with(LEGACY_CONTEXT_PREFIX))
                             && prompt == materialized_prompt(v)
                     });
@@ -446,6 +451,9 @@ impl Store {
                 return Err("409: 다른 작업에서 변경했습니다. 새로고침하세요.".into());
             }
         }
+        if kind == "note" {
+            self.create("noteRevision", json!({"noteId":id,"snapshot":old.clone()}))?;
+        }
         let version = old["version"].as_u64().unwrap_or(0) + 1;
         for (k, v) in patch.as_object().ok_or("객체가 필요합니다.")? {
             if !["id", "createdAt", "version"].contains(&k.as_str()) {
@@ -506,6 +514,11 @@ impl Store {
             }
             let mut v = self.unpack(v)?;
             if kind == "run" {
+                if v["memoryCapture"].is_object() {
+                    let c = &v["memoryCapture"];
+                    v["memoryCapture"] =
+                        json!({"status":c["status"],"source":c["source"],"noteIds":c["noteIds"]});
+                }
                 let answer = text(&v, "answer").to_owned();
                 let output = text(&v, "output").to_owned();
                 v["answerTruncated"] = json!(answer.chars().count() > 8000);
@@ -678,7 +691,9 @@ impl Store {
             && c["notes"].as_array().is_some_and(|ns| {
                 ns.iter().all(|n| {
                     notes.get(text(n, "id")).is_some_and(|current| {
-                        current["version"] == n["version"]
+                        current["archived"] != true
+                            && self.valid_memory(current, project, notes, shared, seen, memo)
+                            && current["version"] == n["version"]
                             && ["verified", "candidate"].contains(&text(current, "status"))
                             && (current["projectId"] == project["id"]
                                 || shared && current["shared"] == true)
@@ -722,6 +737,21 @@ impl Store {
         let shared = b["includeShared"] == true;
         let scoped = self.scoped_notes(project_id, shared)?;
         let notes = self.refresh_note_records(scoped)?;
+        let all_notes = self.note_validation_metadata()?;
+        let notes: Vec<_> = notes
+            .into_iter()
+            .filter(|n| {
+                n["archived"] != true
+                    && self.valid_memory(
+                        n,
+                        &p,
+                        &all_notes,
+                        shared,
+                        &mut HashSet::new(),
+                        &mut HashMap::new(),
+                    )
+            })
+            .collect();
         let eligible_notes = notes
             .iter()
             .filter(|n| ["candidate", "verified"].contains(&text(n, "status")))
@@ -812,7 +842,7 @@ impl Store {
         }
         previous.reverse();
         let dependencies:Vec<_>=selected.iter().map(|n|json!({"id":n["id"],"version":n["version"],"projectId":n["projectId"],"sourcePath":n["sourcePath"],"sourceHash":n["sourceHash"]})).collect();
-        let mut stable = json!({"contextVersion":2,"projectId":project_id,"goal":goal,"includeShared":shared,"files":files,"notes":selected,"previous":previous,"provenance":dependencies});
+        let mut stable = json!({"contextVersion":3,"projectId":project_id,"goal":goal,"includeShared":shared,"files":files,"notes":selected,"previous":previous,"provenance":dependencies});
         if let Some(id) = b.get("resumeRunId").filter(|v| !v.is_null()) {
             let id = id.as_str().ok_or("인계 실행 ID 형식 오류")?;
             let mut run = self.get(id, "run")?;
@@ -1608,6 +1638,7 @@ impl Store {
                 self.file_hashes.clear();
                 Ok(result)
             }
+            ("POST", ["projects", "create"]) => self.create_project(body),
             ("POST", ["notes"]) => {
                 let b = self.note_input(body)?;
                 self.create("note", b)
@@ -1619,15 +1650,26 @@ impl Store {
                 let b = self.note_input(body)?;
                 self.update("note", id, b)
             }
-            ("DELETE", ["notes", id]) => {
-                self.delete("note", id)?;
-                for e in self.all("edge")? {
-                    if text(&e, "from") == *id || text(&e, "to") == *id {
-                        self.delete("edge", text(&e, "id"))?;
-                    }
+            ("POST", ["notes", id, "archive" | "restore"]) | ("DELETE", ["notes", id]) => {
+                if body.get("version").is_none() {
+                    return Err("수정 버전이 필요합니다.".into());
                 }
-                Ok(json!({"ok":true}))
+                self.update(
+                    "note",
+                    id,
+                    json!({"version":body["version"],"archived": !path.ends_with("/restore")}),
+                )
             }
+            ("GET", ["notes", id, "history"]) => {
+                self.get(id, "note")?;
+                Ok(json!(self
+                    .all("noteRevision")?
+                    .into_iter()
+                    .filter(|n| text(n, "noteId") == *id)
+                    .collect::<Vec<_>>()))
+            }
+            ("POST", ["runs", id, "memory"]) => self.capture_memory(id, false),
+            ("POST", ["projects", id, "memory-review"]) => self.memory_review(id),
             ("POST", ["edges"]) => {
                 let from = required(&body, "from")?;
                 let to = required(&body, "to")?;

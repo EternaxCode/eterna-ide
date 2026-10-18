@@ -6,7 +6,7 @@ test('real UI: project, editor, knowledge graph, stale evidence, tests, persiste
  const folder=mkdtempSync(join(tmpdir(),'nexus-e2e-'));writeFileSync(join(folder,'main.js'),'export const value = 1;\n');
  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('/#token=e2e-test-token');
- await page.getByRole('button',{name:'프로젝트 추가',exact:true}).click();await page.getByLabel('프로젝트 이름').fill('브라우저 검증');await page.getByLabel('폴더의 절대 경로').fill(folder);await page.getByRole('button',{name:'프로젝트 연결',exact:true}).click();
+ await page.getByRole('button',{name:'프로젝트 추가',exact:true}).click();await page.getByRole('tab',{name:'기존 폴더 연결',exact:true}).click();await page.getByLabel('프로젝트 이름').fill('브라우저 검증');await page.getByLabel('폴더의 절대 경로').fill(folder);await page.getByRole('button',{name:'프로젝트 연결',exact:true}).click();
  await page.getByRole('button',{name:'main.js',exact:true}).click();
  const editor=page.locator('.cm-content');await editor.fill('export const value = 2;\n');await page.getByRole('button',{name:'변경 비교',exact:true}).click();await expect(page.locator('.diff-view .added')).toContainText('value = 2');await page.getByRole('button',{name:'파일 저장',exact:true}).click();await expect.poll(()=>readFileSync(join(folder,'main.js'),'utf8')).toContain('value = 2');
  await page.getByRole('button',{name:'배운 점 남기기'}).click();await page.getByLabel('제목',{exact:true}).fill('검증된 입력 원칙');await page.getByLabel('내용',{exact:true}).fill('공통 지식 저장과 근거 추적을 검증합니다.');await page.locator('#note-status').selectOption('verified');await page.getByRole('button',{name:'기록 저장',exact:true}).click();
@@ -90,7 +90,7 @@ test('3D knowledge: selection, orbit, filtering, reduced motion and mobile',asyn
 
 test('memory workflow: pin, project instructions, context budget and explicit handoff',async({page})=>{
  const folder=mkdtempSync(join(tmpdir(),'eterna-memory-ui-'));writeFileSync(join(folder,'AGENTS.md'),'Run the project tests before reporting completion.');writeFileSync(join(folder,'main.js'),'export const ok = true;');
- await page.goto('/#token=e2e-test-token');await page.getByRole('button',{name:'프로젝트 추가',exact:true}).click();await page.getByLabel('프로젝트 이름',{exact:true}).fill('메모리 검증');await page.getByLabel('폴더의 절대 경로').fill(folder);await page.getByRole('button',{name:'프로젝트 연결',exact:true}).click();
+ await page.goto('/#token=e2e-test-token');await page.getByRole('button',{name:'프로젝트 추가',exact:true}).click();await page.getByRole('tab',{name:'기존 폴더 연결',exact:true}).click();await page.getByLabel('프로젝트 이름',{exact:true}).fill('메모리 검증');await page.getByLabel('폴더의 절대 경로').fill(folder);await page.getByRole('button',{name:'프로젝트 연결',exact:true}).click();
  await page.getByRole('button',{name:'배운 점 남기기'}).click();await page.getByLabel('제목',{exact:true}).fill('중요한 작업 원칙');await page.getByLabel('내용',{exact:true}).fill('검증 결과를 실제 근거와 함께 남긴다.');await page.getByRole('checkbox',{name:'중요 기억으로 고정 · 맥락 선택 우선'}).check();await page.getByRole('button',{name:'기록 저장',exact:true}).click();
  await page.getByLabel('AI 작업 요청').fill('작업 원칙에 따라 구현');await page.getByText('완료 조건 · 작업 인계',{exact:true}).click();await page.getByLabel('완료 조건',{exact:true}).fill('프로젝트 테스트 통과');await page.getByRole('button',{name:'전달할 근거 보기',exact:true}).click();
  const preview=page.getByRole('dialog',{name:'전달할 근거',exact:true});await expect(preview.getByLabel('맥락 용량')).toContainText('64 KiB');await expect(preview.getByText('AGENTS.md',{exact:true})).toBeVisible();await expect(preview.getByText('프로젝트 테스트 통과',{exact:true})).toBeVisible();await page.screenshot({path:'artifacts/memory-context-preview.png',fullPage:true});await preview.getByRole('button',{name:'닫기',exact:true}).click();
@@ -99,4 +99,33 @@ test('memory workflow: pin, project instructions, context budget and explicit ha
  await page.route('**/api/state',r=>r.fulfill({json:{...state,runs:[run]}}));await page.route('**/api/runs/'+run.id,r=>r.fulfill({json:run}));await page.route('**/api/runs/'+run.id+'/handoff',r=>r.fulfill({json:{runId:run.id,projectId:project.id,goal:run.goal,acceptanceCriteria:'회귀 테스트 통과',status:run.status}}));
  await page.getByRole('button',{name:'실행 기록',exact:true}).click();await page.getByRole('button').filter({hasText:'중단된 구현'}).click();await page.getByRole('button',{name:'이 작업 이어가기',exact:true}).click();await expect(page.getByLabel('AI 작업 요청')).toHaveValue(run.goal);await expect(page.getByLabel('완료 조건',{exact:true})).toHaveValue('회귀 테스트 통과');
  let payload:any;await page.route('**/api/context',r=>{payload=r.request().postDataJSON();return r.fulfill({json:{prompt:'handoff preview',files:[],notes:[],previous:[]}});});await page.getByRole('button',{name:'전달할 근거 보기',exact:true}).click();await expect.poll(()=>payload).toMatchObject({projectId:project.id,resumeRunId:run.id,acceptanceCriteria:'회귀 테스트 통과'});
+});
+
+test('new project dialog creates a tested starter and refuses to overwrite it',async({page})=>{
+ const parent=mkdtempSync(join(tmpdir(),'eterna-create-ui-'));
+ await page.goto('/#token=e2e-test-token');await page.getByRole('button',{name:'프로젝트 추가',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'프로젝트 추가'});
+ await expect(dialog.getByRole('tab',{name:'새 프로젝트 만들기'})).toHaveAttribute('aria-selected','true');
+ await dialog.getByLabel('프로젝트 이름',{exact:true}).fill('새로운 앱');await dialog.getByLabel('상위 폴더',{exact:true}).fill(parent);await dialog.getByLabel('새 폴더 이름').fill('starter');await dialog.getByRole('radio',{name:/JavaScript/}).check();
+ await expect(dialog.locator('.project-location')).toContainText(join(parent,'starter'));await page.screenshot({path:'artifacts/new-project-dialog.png',fullPage:true});
+ await dialog.getByRole('button',{name:'프로젝트 만들기',exact:true}).click();await expect(dialog).toBeHidden();await expect(page.getByRole('button',{name:'index.mjs',exact:true})).toBeVisible();
+ expect(readFileSync(join(parent,'starter','README.md'),'utf8')).toContain('새로운 앱');
+ await page.getByRole('button',{name:'테스트 실행',exact:true}).click();await expect(page.getByLabel('실행 명령',{exact:true})).toHaveValue('node --test');await page.getByRole('button',{name:'명령 실행',exact:true}).click();await expect(page.locator('.answer-heading')).toContainText('완료',{timeout:15000});
+ writeFileSync(join(parent,'starter','index.mjs'),'// keep my work');
+ await page.getByRole('button',{name:'프로젝트 추가',exact:true}).click();await dialog.getByLabel('프로젝트 이름',{exact:true}).fill('중복');await dialog.getByLabel('상위 폴더',{exact:true}).fill(parent);await dialog.getByLabel('새 폴더 이름').fill('starter');await dialog.getByRole('button',{name:'프로젝트 만들기',exact:true}).click();await expect(dialog.getByRole('alert')).toContainText('같은 이름');expect(readFileSync(join(parent,'starter','index.mjs'),'utf8')).toBe('// keep my work');
+ await page.setViewportSize({width:390,height:844});await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);await page.screenshot({path:'artifacts/new-project-mobile.png',fullPage:true});
+});
+
+test('memory archive preserves originals, restores context and exposes review suggestions',async({page})=>{
+ const headers={Authorization:'Bearer e2e-test-token'};const parent=mkdtempSync(join(tmpdir(),'eterna-archive-ui-'));
+ const p=await (await page.request.post('/api/projects/create',{headers,data:{name:'기억 보존',parentPath:parent,folderName:'memory',template:'empty'}})).json();
+ const body={projectId:p.id,title:'해결 원칙',body:'실패 원인: 입력 검증 누락\n해결 방법: 경계에서 검증',kind:'lesson',status:'candidate',shared:false};
+ const note=await (await page.request.post('/api/notes',{headers,data:body})).json();await page.request.post('/api/notes',{headers,data:{...body,title:'동일한 발견'}});
+ await page.goto('/#token=e2e-test-token');await page.evaluate(id=>localStorage.setItem('nexus-project',id),p.id);await page.reload();await page.getByRole('button',{name:/지식 그래프/}).click();await page.getByRole('button',{name:'기억 정리 점검',exact:true}).click();await expect(page.locator('.memory-review-result')).toContainText('본문 중복 후보 1묶음');
+ await page.locator('.note-row').filter({hasText:'해결 원칙'}).click();await page.getByRole('button',{name:'기억 보관',exact:true}).click();await expect(page.locator('.note-row').filter({hasText:'해결 원칙'})).toHaveCount(0);
+ const context=await (await page.request.post('/api/context',{headers,data:{projectId:p.id,goal:'실패 입력 검증 해결'}})).json();expect(context.notes.some((n:any)=>n.id===note.id)).toBe(false);
+ await page.getByLabel('기억 표시').selectOption('archived');await expect(page.locator('.note-detail')).toContainText(body.body);await page.getByRole('button',{name:'변경 이력 · 원본 보기'}).click();await expect(page.locator('.memory-versions')).toContainText('버전 1');await page.screenshot({path:'artifacts/memory-archive.png',fullPage:true});
+ await page.getByRole('button',{name:'기억 복원',exact:true}).click();await expect(page.locator('.note-row')).toHaveCount(0);await page.getByLabel('기억 표시').selectOption('active');await expect(page.locator('.note-row').filter({hasText:'해결 원칙'})).toBeVisible();
+ const history=await (await page.request.get('/api/notes/'+note.id+'/history',{headers})).json();expect(history).toHaveLength(2);expect(history.every((h:any)=>h.snapshot.body===body.body)).toBe(true);
+ const restored=await (await page.request.post('/api/context',{headers,data:{projectId:p.id,goal:'실패 입력 검증 해결'}})).json();expect(restored.notes.some((n:any)=>n.id===note.id)).toBe(true);
 });

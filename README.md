@@ -19,6 +19,7 @@ A native Windows/macOS AI workspace that connects code, decisions, evidence, and
 
 - **Edit and review:** syntax highlighting, local files, optimistic saves, and diff review.
 - **Share knowledge across models:** one evidence-backed knowledge store for GPT/Codex and Claude Code; explicit opt-in for cross-project context.
+- **Remember completed work:** the same AI turn reports decisions, failure causes and solutions as candidate memories. Originals and revision history remain available; archive/restore and duplicate/age review never silently delete them.
 - **Keep memory current:** records reference source hashes; changed evidence becomes stale. Revoked or outdated knowledge is excluded from inherited answers too.
 - **Work in source snapshots:** coding terminals edit a separate source copy. Review and apply individual files without silently overwriting concurrent original edits.
 - **Keep an execution trail:** local tests, exit codes, context snapshots, interruption status, and persistent history.
@@ -29,9 +30,9 @@ A native Windows/macOS AI workspace that connects code, decisions, evidence, and
 
 Download the macOS Apple Silicon DMG or Windows x64 installer from [GitHub Releases](https://github.com/EternaxCode/eterna-ide/releases). Desktop builds use Tauri 2 and Rust; **Node.js and a localhost server are not required to run the app**. Official AI CLIs and your project's development tools are separate installations.
 
-The 0.3 beta is not Apple Developer ID notarized or commercially Windows-signed. macOS is tested on a real Mac; Windows validation uses installation and native renderer smoke tests in CI. Intel Mac and Windows ARM packages are not currently offered.
+The beta is not Apple Developer ID notarized or commercially Windows-signed. macOS is tested on a real Mac; Windows validation uses installation and native renderer smoke tests in CI. Intel Mac and Windows ARM packages are not currently offered.
 
-1. Select a project using the native folder picker.
+1. Create a project from an empty, JavaScript or Python starter, or connect an existing folder using the native folder picker.
 2. Import existing `.data/nexus.sqlite` from **모델 연결 → 기존 데이터 가져오기**. The original stays untouched.
 3. Open a file, inspect the context preview, and ask GPT a question.
 4. Use the official coding terminal in a source snapshot, then review changes before applying them.
@@ -54,7 +55,7 @@ Native development additionally requires the [Tauri platform prerequisites](http
 
 **GPT / Codex:** use **모델 연결** (model connections) to start the official login. Existing ChatGPT authentication is recognized. The desktop app reuses an installed official native CLI and does not copy credentials. An empty model setting uses the CLI default; availability depends on your account. The legacy web runner includes its own official CLI package.
 
-**Claude Code:** install the [official CLI](https://code.claude.com/docs/en/overview), then use the account-login terminal. Claude runs interactively with its own permission prompts. It reads the same context bundle as GPT, but its terminal output is not automatically ingested into memory; save selected conclusions explicitly.
+**Claude Code:** install the [official CLI](https://code.claude.com/docs/en/overview), then use the account-login terminal. Claude runs interactively with its own permission prompts. It reads the same context bundle as GPT, and can write a structured end-of-task report that becomes candidate memory automatically. Full terminal transcripts are not ingested.
 
 Subscription limits and billing settings belong to the providers. Eterna does **not** rotate accounts to bypass limits, copy authentication tokens, or silently fall back to paid API calls. Real Claude inference requires your completed login and was not part of the original author's live verification.
 

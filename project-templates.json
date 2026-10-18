@@ -1,0 +1,38 @@
+{
+  "empty": {
+    "label": "빈 프로젝트",
+    "description": "README와 개발 지침으로 가볍게 시작합니다.",
+    "verificationCommand": "",
+    "files": {
+      "AGENTS.md": "# Project workflow\n\n- Read the current task and acceptance criteria before changing files.\n- Keep changes focused. Preserve unrelated work and secrets.\n- Run the project tests when available and report observed results.\n- Separate verified results, unresolved failures, and next steps.\n",
+      ".gitignore": ".env\n.env.*\nnode_modules/\n__pycache__/\n.venv/\n.nexus/\n",
+      "README.md": "# {{PROJECT_NAME}}\n\n## 목표\n\n이 프로젝트에서 만들 내용을 작성하세요.\n\n## 완료 조건\n\n검증할 결과와 실행 방법을 기록하세요.\n"
+    }
+  },
+  "javascript": {
+    "label": "JavaScript + 테스트",
+    "description": "추가 패키지 설치 없이 Node.js 기본 테스트로 시작합니다.",
+    "verificationCommand": "node --test",
+    "files": {
+      "AGENTS.md": "# Project workflow\n\n- Read the current task and acceptance criteria before changing files.\n- Keep changes focused. Preserve unrelated work and secrets.\n- Run the project tests when available and report observed results.\n- Separate verified results, unresolved failures, and next steps.\n",
+      ".gitignore": ".env\n.env.*\nnode_modules/\n__pycache__/\n.venv/\n.nexus/\n",
+      "README.md": "# {{PROJECT_NAME}}\n\nNode.js가 필요합니다. 의존성 설치 없이 `node --test`로 검증합니다.\n",
+      "package.json": "{\n  \"name\": \"eterna-project\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  }\n}\n",
+      "index.mjs": "export function greet(name) {\n  return `안녕하세요, ${name.trim() || \"친구\"}님!`;\n}\n",
+      "index.test.mjs": "import test from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport {greet} from \"./index.mjs\";\ntest(\"공백과 빈 이름을 처리한다\", () => {\n  assert.equal(greet(\" Eterna \"), \"안녕하세요, Eterna님!\");\n  assert.equal(greet(\" \"), \"안녕하세요, 친구님!\");\n});\n"
+    }
+  },
+  "python": {
+    "label": "Python + 테스트",
+    "description": "표준 unittest를 사용하는 작은 Python 프로젝트입니다.",
+    "verificationCommand": "python3 -m unittest discover",
+    "windowsVerificationCommand": "py -m unittest discover",
+    "files": {
+      "AGENTS.md": "# Project workflow\n\n- Read the current task and acceptance criteria before changing files.\n- Keep changes focused. Preserve unrelated work and secrets.\n- Run the project tests when available and report observed results.\n- Separate verified results, unresolved failures, and next steps.\n",
+      ".gitignore": ".env\n.env.*\nnode_modules/\n__pycache__/\n.venv/\n.nexus/\n",
+      "README.md": "# {{PROJECT_NAME}}\n\nPython 3이 필요합니다. macOS: `python3 -m unittest discover`, Windows: `py -m unittest discover`.\n",
+      "app.py": "def greet(name):\n    return f\"안녕하세요, {name.strip() or '친구'}님!\"\n",
+      "test_app.py": "import unittest\nfrom app import greet\n\nclass GreetingTests(unittest.TestCase):\n    def test_names(self):\n        self.assertEqual(greet(\" Eterna \"), \"안녕하세요, Eterna님!\")\n        self.assertEqual(greet(\" \"), \"안녕하세요, 친구님!\")\n"
+    }
+  }
+}
