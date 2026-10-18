@@ -366,7 +366,9 @@ impl Store {
                     .get("prompt")
                     .and_then(Value::as_str)
                     .is_some_and(|prompt| {
-                        prompt.starts_with(CONTEXT_PREFIX) && prompt == materialized_prompt(v)
+                        (prompt.starts_with(CONTEXT_PREFIX)
+                            || prompt.starts_with(LEGACY_CONTEXT_PREFIX))
+                            && prompt == materialized_prompt(v)
                     });
                 let mut out = serde_json::Map::new();
                 for (k, v) in m {
@@ -1932,6 +1934,31 @@ mod tests {
             .unwrap()
             .iter()
             .all(|n| n["pinned"] == true));
+    }
+    #[test]
+    fn legacy_prompt_remains_byte_identical_and_reference_based_after_updates() {
+        let (_d, mut s, p) = fixture();
+        let mut c = json!({"projectId":p["id"],"goal":"예전 작업","includeShared":false,"files":[],"notes":[],"previous":[],"provenance":[]});
+        let prompt = materialized_prompt(&c);
+        assert!(prompt.starts_with(LEGACY_CONTEXT_PREFIX));
+        c["prompt"] = json!(prompt);
+        let stored = s.create("context", c).unwrap();
+        let updated = s
+            .update("context", text(&stored, "id"), json!({"checked":true}))
+            .unwrap();
+        assert_eq!(updated["prompt"], prompt);
+        let raw: String =
+            s.db.query_row(
+                "SELECT data FROM records WHERE id=?1",
+                [text(&stored, "id")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(raw.contains("$eternaPrompt"));
+        assert_eq!(
+            s.get(text(&stored, "id"), "context").unwrap()["prompt"],
+            prompt
+        );
     }
     #[test]
     fn shared_history_dag_is_validated_once_per_run_and_cache_is_request_scoped() {
