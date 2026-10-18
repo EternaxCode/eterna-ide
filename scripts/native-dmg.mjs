@@ -1,0 +1,10 @@
+import {spawnSync} from 'node:child_process';
+import {mkdtempSync,symlinkSync,existsSync,mkdirSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {resolve,join} from 'node:path';
+if(process.platform!=='darwin')throw new Error('DMG packaging requires macOS');
+const version=JSON.parse((await import('node:fs')).readFileSync('package.json','utf8')).version;
+const app=resolve('src-tauri/target/release/bundle/macos/Eterna IDE.app');if(!existsSync(app))throw new Error('Build the app bundle first');
+const stage=mkdtempSync(join(tmpdir(),'eterna-dmg-'));let r=spawnSync('ditto',[app,join(stage,'Eterna IDE.app')],{stdio:'inherit'});if(r.status)process.exit(r.status);
+symlinkSync('/Applications',join(stage,'Applications'));const dest=resolve(`src-tauri/target/release/bundle/dmg/Eterna-IDE_${version}_${process.arch}.dmg`);mkdirSync(resolve('src-tauri/target/release/bundle/dmg'),{recursive:true});
+r=spawnSync('hdiutil',['create','-volname','Eterna IDE','-srcfolder',stage,'-ov','-format','UDZO',dest],{stdio:'inherit'});if(r.status)process.exit(r.status);console.log(dest);

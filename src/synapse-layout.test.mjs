@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {layoutEvents,mergeEvents,normalizeEvents} from './synapse-layout.ts';
+const fixture=Array.from({length:500},(_,i)=>({id:i+1,runId:'r1',kind:'read',label:`기록 ${i}`,createdAt:'2026-10-18T00:00:00Z',refs:[{id:`file${i}`,label:`파일 ${i}`,type:'file'}]}));
+test('GPU budget retains newest evidence with no dangling graph edges',()=>{const graph=layoutEvents(fixture);assert.equal(graph.nodes.length,300);assert.equal(graph.nodes[0].eventId,500);assert.ok(graph.omitted>0);assert.ok(graph.links.length<=1200);assert.ok(graph.links.every(([a,b])=>a>=0&&b>=0&&a<graph.nodes.length&&b<graph.nodes.length));});
+test('identity-based layout is deterministic across replays',()=>{assert.deepEqual(layoutEvents(fixture),layoutEvents(fixture));const full=layoutEvents(fixture),part=layoutEvents(fixture.slice(-20));const node=full.nodes[0],replayed=part.nodes.find(n=>n.id===node.id);assert.deepEqual([node.x,node.y,node.z],[replayed.x,replayed.y,replayed.z]);});
+test('empty polling preserves React state identity and duplicate events do not multiply',()=>{assert.equal(mergeEvents(fixture,[]),fixture);assert.equal(mergeEvents(fixture,[fixture[0]]).length,fixture.length);});
+test('native serialized references and malformed references are safely normalized',()=>{assert.deepEqual(normalizeEvents([{...fixture[0],refs:JSON.stringify(fixture[0].refs)}])[0].refs,fixture[0].refs);assert.deepEqual(normalizeEvents([{...fixture[0],refs:'malformed'}])[0].refs,[]);assert.deepEqual(normalizeEvents(null),[]);assert.deepEqual(normalizeEvents([{id:'not-a-sequence'}]),[]);});
+
+test('run-local tool IDs never merge unrelated calls across runs',()=>{const events=[{...fixture[0],id:1,runId:'run-a',refs:[{id:'item_0',type:'tool',label:'command A'}]},{...fixture[0],id:2,runId:'run-b',refs:[{id:'item_0',type:'tool',label:'command B'}]}];const graph=layoutEvents(events);assert.equal(graph.nodes.filter(n=>n.type==='tool').length,2);assert.equal(new Set(graph.nodes.filter(n=>n.type==='tool').map(n=>n.id)).size,2);assert.equal(graph.links.length,2);});

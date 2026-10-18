@@ -1,8 +1,10 @@
+import {native,desktopRequest} from './native';
 const initial=new URLSearchParams(location.hash.slice(1)).get('token');
 if(initial){sessionStorage.setItem('nexus-token',initial);history.replaceState(null,'',location.pathname);}
 let stateTag:string|null=null,stateCache:unknown;
 let pendingState:Promise<any>|null=null;
 async function request(path:string,body?:unknown,method?:string){
+ if(native){try{return await desktopRequest(path,body,method);}catch(e){throw new Error(typeof e==='string'?e:String(e));}}
  const conditional=path==='/state'&&!body;
  const headers:Record<string,string>={'Authorization':'Bearer '+(sessionStorage.getItem('nexus-token')||''),'Content-Type':'application/json'};
  if(conditional&&stateTag)headers['If-None-Match']=stateTag;
@@ -15,7 +17,7 @@ export function api(path:string,body?:unknown,method?:string):Promise<any>{
  if(path==='/state'&&!body){if(pendingState)return pendingState;pendingState=request(path).finally(()=>{pendingState=null;});return pendingState;}
  return request(path,body,method);
 }
-export function download(filename:string,content:string){const url=URL.createObjectURL(new Blob([content],{type:'text/markdown;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+export function download(filename:string,content:string){if(native){import('@tauri-apps/api/core').then(({invoke})=>invoke('save_export',{filename,content})).catch(e=>alert(String(e)));return;}const url=URL.createObjectURL(new Blob([content],{type:'text/markdown;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 export type Project={id:string;name:string;path:string};
 export type Note={id:string;projectId:string;title:string;body:string;kind:string;status:string;shared:boolean;sourcePath?:string;sourceHash?:string;version:number;author:string;updatedAt:string};
 export type Edge={id:string;from:string;to:string;label:string};

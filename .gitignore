@@ -14,3 +14,9 @@ playwright-report/
 *.pfx
 *.sqlite
 *.sqlite-*
+src-tauri/target/
+src-tauri/gen/schemas/
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
+/src-tauri/icons/Square*.png
+/src-tauri/icons/StoreLogo.png

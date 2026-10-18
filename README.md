@@ -81,3 +81,7 @@ npm run benchmark
 `npm start` runs in the foreground. `npm run dev` rebuilds once and watches the Node server. `scripts/smoke.mjs` and `scripts/terminal-smoke.mjs` are opt-in live provider probes that consume your subscription allowance.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [MIT license](LICENSE). Built by [EternaxCode](https://github.com/EternaxCode).
+
+## Native desktop preview (0.3)
+
+A Tauri/Rust desktop build is available for macOS Apple Silicon and Windows x64. It runs without the local Node server, retains the same UI, adds read-only legacy import into a separate CAS/Zstd-backed store, source-snapshot archival/restoration, and an actual-event 3D Synapse timeline. See [Desktop installation and operation](docs/DESKTOP.md). Official AI tools remain separate installations. Package verification does not imply Apple notarization or Windows commercial signing.
