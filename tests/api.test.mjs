@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtempSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+const dir=mkdtempSync(join(tmpdir(),'nexus-api-'));const port=14319,token='integration-test-token';
+let child;const base=`http://127.0.0.1:${port}`;
+async function request(path,body,method){return fetch(base+'/api'+path,{method:method||(body?'POST':'GET'),headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});}
+test.before(async()=>{child=spawn('node',['server/index.mjs'],{env:{...process.env,NEXUS_PORT:String(port),NEXUS_DATA_DIR:dir,NEXUS_TEST_TOKEN:token},stdio:'ignore'});for(let i=0;i<50;i++){try{await request('/state');return;}catch{await new Promise(r=>setTimeout(r,100));}}throw new Error('server not ready');});
+test.after(()=>child?.kill('SIGTERM'));
+test('API denies missing credentials and cross-site requests',async()=>{assert.equal((await fetch(base+'/api/state')).status,401);assert.equal((await fetch(base+'/api/state',{headers:{Authorization:'Bearer '+token,Origin:'https://attacker.example'}})).status,403);});
+test('note source removal clears both path and hash',async()=>{const p=(await (await request('/state')).json()).projects[0];const n=await (await request('/notes',{projectId:p.id,title:'remove source',body:'test',kind:'lesson',status:'verified',shared:false,sourcePath:'greet.mjs'})).json();assert(n.sourceHash);const updated=await (await request('/notes/'+n.id,{projectId:p.id,title:n.title,body:'test',kind:'lesson',status:'verified',shared:false,version:n.version},'PUT')).json();assert.equal(updated.sourcePath,null);assert.equal(updated.sourceHash,null);});
+test('optimistic edits and secret access are enforced through HTTP',async()=>{const folder=mkdtempSync(join(tmpdir(),'nexus-project-'));writeFileSync(join(folder,'main.js'),'one');writeFileSync(join(folder,'.env'),'DO_NOT_READ');const p=await (await request('/projects',{name:'test',path:folder})).json();assert.equal((await request(`/projects/${p.id}/file?path=.env`)).status,400);const f=await (await request(`/projects/${p.id}/file?path=main.js`)).json();writeFileSync(join(folder,'main.js'),'other');assert.equal((await request(`/projects/${p.id}/file`,{path:'main.js',content:'overwrite',hash:f.hash},'PUT')).status,409);});

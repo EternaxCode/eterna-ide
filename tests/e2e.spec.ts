@@ -1,0 +1,23 @@
+import {test,expect} from '@playwright/test';
+import {mkdtempSync,writeFileSync,readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+test('real UI: project, editor, knowledge graph, stale evidence, tests, persistence, mobile',async({page})=>{
+ const folder=mkdtempSync(join(tmpdir(),'nexus-e2e-'));writeFileSync(join(folder,'main.js'),'export const value = 1;\n');
+ const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('/#token=e2e-test-token');
+ await page.getByRole('button',{name:'프로젝트 추가',exact:true}).click();await page.getByLabel('프로젝트 이름').fill('브라우저 검증');await page.getByLabel('폴더의 절대 경로').fill(folder);await page.getByRole('button',{name:'프로젝트 연결',exact:true}).click();
+ await page.getByRole('button',{name:'main.js',exact:true}).click();
+ const editor=page.locator('.cm-content');await editor.fill('export const value = 2;\n');await page.getByRole('button',{name:'변경 비교',exact:true}).click();await expect(page.locator('.diff-view .added')).toContainText('value = 2');await page.getByRole('button',{name:'파일 저장',exact:true}).click();await expect.poll(()=>readFileSync(join(folder,'main.js'),'utf8')).toContain('value = 2');
+ await page.getByRole('button',{name:'배운 점 남기기'}).click();await page.getByLabel('제목',{exact:true}).fill('검증된 입력 원칙');await page.getByLabel('내용',{exact:true}).fill('공통 지식 저장과 근거 추적을 검증합니다.');await page.locator('#note-status').selectOption('verified');await page.getByRole('button',{name:'기록 저장',exact:true}).click();
+ await page.getByRole('button',{name:/지식 그래프/}).click();await expect(page.locator('.note-list')).toContainText('검증된 입력 원칙');
+ await page.getByRole('button',{name:'기록 남기기',exact:true}).click();await page.getByLabel('제목',{exact:true}).fill('연결된 결정');await page.getByLabel('내용',{exact:true}).fill('첫 기록을 참고하는 결정.');await page.getByRole('button',{name:'기록 저장',exact:true}).click();
+ await page.getByRole('button',{name:/연결된 결정.*배운 점/}).click();await page.getByLabel('연결할 기록').selectOption({label:'검증된 입력 원칙'});await page.getByRole('button',{name:'연결 추가',exact:true}).click();await expect(page.locator('svg .edge-label')).toHaveCount(1);
+ writeFileSync(join(folder,'main.js'),'export const value = 3;\n');await expect(page.locator('.note-row').filter({hasText:'검증된 입력 원칙'})).toContainText('재검증 필요');
+ await page.reload();await page.getByRole('button',{name:/지식 그래프/}).click();await expect(page.locator('.note-list')).toContainText('연결된 결정');
+ await page.getByRole('button',{name:'작업실',exact:true}).click();await page.getByRole('button',{name:'테스트 실행',exact:true}).click();await page.getByLabel('실행 명령',{exact:true}).fill('node -e "console.log(42)"');await page.getByRole('button',{name:'명령 실행',exact:true}).click();await expect(page.locator('.answer-heading')).toContainText('완료',{timeout:15000});await expect(page.locator('.run-output')).toContainText('42');
+ await page.getByRole('button',{name:'전달할 근거 보기'}).click();await expect(page.locator('.context-preview')).not.toContainText('공통 지식 저장과 근거 추적을 검증합니다.');await page.getByRole('button',{name:'닫기',exact:true}).click();
+ await page.screenshot({path:'artifacts/e2e-workspace.png',fullPage:true});
+ await page.setViewportSize({width:390,height:844});await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);await page.screenshot({path:'artifacts/mobile.png',fullPage:true});
+ expect(errors).toEqual([]);
+});
