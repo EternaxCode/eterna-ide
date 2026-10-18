@@ -31,6 +31,17 @@ async fn desktop_request(
     tauri::async_runtime::spawn_blocking(move||{
   if path=="/desktop-info" {return Ok(json!({"native":true,"platform":std::env::consts::OS,"version":env!("CARGO_PKG_VERSION"),"dataDir":root,"smoke":std::env::var_os("ETERNA_UI_SMOKE").is_some()}));}
   if path=="/providers" {return runtime.providers();}
+  if path=="/provider-settings" {
+    if method=="GET" {return Ok(store.lock().map_err(|_|"저장소 잠금 오류")?.all("providerSettings")?.first().cloned().unwrap_or(json!({"codexPath":null})));}
+    let selected=body["codexPath"].as_str().filter(|s|!s.is_empty()).map(PathBuf::from);
+    let checked=runtime.set_codex_path(selected.clone())?;
+    let mut db=store.lock().map_err(|_|"저장소 잠금 오류")?;
+    let patch=json!({"codexPath":checked["path"].clone()});
+    let existing=db.all("providerSettings")?.first().cloned();
+    if let Some(old)=existing {db.update("providerSettings",old["id"].as_str().ok_or("설정 ID 오류")?,patch)?;}else{db.create("providerSettings",patch)?;}
+    return Ok(checked);
+  }
+
   if path=="/runs" && method=="POST" {return runtime.start("ai",body);}
   if path=="/tests" && method=="POST" {return runtime.start("test",body);}
   if path.starts_with("/runs/") && path.ends_with("/cancel") {return runtime.cancel(path.split('/').nth(2).unwrap_or(""));}
@@ -194,6 +205,7 @@ pub fn run() {
                     .map_err(std::io::Error::other)?;
             }
             seed(&mut db, &root).map_err(std::io::Error::other)?;
+            let stored_codex=db.all("providerSettings").map_err(std::io::Error::other)?.first().and_then(|s|s["codexPath"].as_str()).map(PathBuf::from);
             let store = Arc::new(Mutex::new(db));
             let handle = app.handle().clone();
             let emit = Arc::new(move |topic: &str, payload: Value| {
@@ -201,7 +213,7 @@ pub fn run() {
             });
             let runtime = Arc::new(Runtime::new(
                 store.clone(),
-                std::env::var_os("ETERNA_CODEX_BIN").map(PathBuf::from),
+                std::env::var_os("ETERNA_CODEX_BIN").map(PathBuf::from).or(stored_codex),
                 emit,
             ));
             app.manage(Desktop {

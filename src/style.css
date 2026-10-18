@@ -4,3 +4,4 @@
 
 .loading-panel{display:grid;place-items:center;min-height:120px;flex:1;font-size:12px;color:#829176}.note-row,.run-row{content-visibility:auto;contain-intrinsic-size:auto 70px}
 .native-storage{display:flex;align-items:center;gap:24px;border:1px solid var(--line);padding:20px;margin-bottom:30px;border-radius:10px;background:#eef3e7}.native-storage p{font-size:11px;color:#74866a;margin:6px 0}.native-storage code{font-size:10px;overflow-wrap:anywhere}.native-storage>button{margin-left:auto}.brand{font-size:27px}.sidebar nav button{font-size:11px}
+.native-tool-choice{border:1px solid var(--line);padding:16px;margin-bottom:20px;border-radius:8px}.native-tool-choice p{font-size:11px;color:#728367;line-height:1.8}.native-tool-choice code{display:block;font-size:10px;margin-top:10px;overflow-wrap:anywhere}

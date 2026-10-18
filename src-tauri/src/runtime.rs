@@ -25,7 +25,7 @@ pub struct Runtime {
 }
 struct Inner {
     store: Arc<Mutex<Store>>,
-    codex: Option<PathBuf>,
+    codex: Mutex<Option<PathBuf>>,
     emit: Emit,
     active: Mutex<HashMap<String, Active>>,
     tickets: Mutex<HashMap<String, Ticket>>,
@@ -395,12 +395,75 @@ fn failure(text: &str) -> &'static str {
         "failed"
     }
 }
+fn resolve_binary(id: &str, configured: Option<&Path>) -> Result<PathBuf, String> {
+    if id == "codex" {
+        if let Some(p) = configured {
+            // Resolve relative overrides before changing the subprocess working directory.
+            let absolute = p
+                .canonicalize()
+                .map_err(|e| format!("설정된 Codex 실행 파일을 확인하세요: {e}"))?;
+            #[cfg(windows)]
+            {
+                return windows_native_candidate(id, &absolute, std::env::consts::ARCH).ok_or_else(
+                    || "설정된 Codex 경로에서 공식 native .exe를 찾지 못했습니다.".into(),
+                );
+            }
+            #[cfg(not(windows))]
+            {
+                return Ok(absolute);
+            }
+        }
+    }
+    let path = clean_env()
+        .into_iter()
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| v);
+    #[cfg(windows)]
+    {
+        if let Some(path) = &path {
+            // Prefer official native installations even when npm shims occur earlier on PATH.
+            let dirs: Vec<_> = std::env::split_paths(path).collect();
+            for dir in &dirs {
+                if let Some(exe) = windows_native_candidate(
+                    id,
+                    &dir.join(format!("{id}.exe")),
+                    std::env::consts::ARCH,
+                ) {
+                    return Ok(exe);
+                }
+            }
+            for dir in &dirs {
+                for suffix in ["cmd", "ps1"] {
+                    let shim = dir.join(format!("{id}.{suffix}"));
+                    if shim.is_file() {
+                        if let Some(exe) =
+                            windows_native_candidate(id, &shim, std::env::consts::ARCH)
+                        {
+                            return Ok(exe);
+                        }
+                    }
+                }
+            }
+        }
+        Err(format!(
+            "{id} 공식 native CLI 설치가 필요합니다. npm 셸 래퍼만 있는 설치는 지원하지 않습니다."
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        which::which_in(id, path, std::env::current_dir().unwrap_or_default())
+            .map_err(|_| format!("{id} 공식 CLI 설치가 필요합니다."))?
+            .canonicalize()
+            .map_err(|e| e.to_string())
+    }
+}
+
 impl Runtime {
     pub fn new(store: Arc<Mutex<Store>>, codex: Option<PathBuf>, emit: Emit) -> Self {
         Self {
             inner: Arc::new(Inner {
                 store,
-                codex,
+                codex: Mutex::new(codex),
                 emit,
                 active: Mutex::new(HashMap::new()),
                 tickets: Mutex::new(HashMap::new()),
@@ -412,65 +475,45 @@ impl Runtime {
         }
     }
     fn binary(&self, id: &str) -> Result<PathBuf, String> {
-        if id == "codex" {
-            if let Some(p) = &self.inner.codex {
-                // Resolve relative overrides before changing the subprocess working directory.
-                let absolute = p
-                    .canonicalize()
-                    .map_err(|e| format!("설정된 Codex 실행 파일을 확인하세요: {e}"))?;
-                #[cfg(windows)]
-                {
-                    return windows_native_candidate(id, &absolute, std::env::consts::ARCH)
-                        .ok_or_else(|| {
-                            "설정된 Codex 경로에서 공식 native .exe를 찾지 못했습니다.".into()
-                        });
-                }
-                #[cfg(not(windows))]
-                {
-                    return Ok(absolute);
-                }
+        let configured = self.inner.codex.lock().map_err(lock_error)?.clone();
+        resolve_binary(id, configured.as_deref())
+    }
+    pub fn set_codex_path(&self, path: Option<PathBuf>) -> ResultValue {
+        // Probe only --version before taking lifecycle locks. Never invoke inference or
+        // hold Store while an external process is running.
+        let resolved = match path.as_deref() {
+            Some(p) => Some(resolve_binary("codex", Some(p))?),
+            None => None,
+        };
+        let detected = resolved
+            .clone()
+            .or_else(|| resolve_binary("codex", None).ok());
+        let version = if let Some(bin) = &detected {
+            let (ok, output) = capture(bin, &["--version"], Duration::from_secs(5))?;
+            if !ok || output.trim().is_empty() {
+                return Err("선택한 Codex 실행 파일의 버전을 확인하지 못했습니다.".into());
             }
-        }
-        let path = clean_env()
-            .into_iter()
-            .find(|(k, _)| k == "PATH")
-            .map(|(_, v)| v);
-        #[cfg(windows)]
+            Some(output.trim().to_owned())
+        } else {
+            None
+        };
+        let opening = self.inner.opening.lock().map_err(lock_error)?;
+        let active = self.inner.active.lock().map_err(lock_error)?;
+        let tickets = self.inner.tickets.lock().map_err(lock_error)?;
+        let terminals = self.inner.terminals.lock().map_err(lock_error)?;
+        if self.inner.shutting_down.load(Ordering::SeqCst)
+            || !opening.is_empty()
+            || !active.is_empty()
+            || !tickets.is_empty()
+            || !terminals.is_empty()
+            || self.inner.pty_closers.load(Ordering::SeqCst) > 0
         {
-            if let Some(path) = &path {
-                // Prefer official native installations even when npm shims occur earlier on PATH.
-                let dirs: Vec<_> = std::env::split_paths(path).collect();
-                for dir in &dirs {
-                    if let Some(exe) = windows_native_candidate(
-                        id,
-                        &dir.join(format!("{id}.exe")),
-                        std::env::consts::ARCH,
-                    ) {
-                        return Ok(exe);
-                    }
-                }
-                for dir in &dirs {
-                    for suffix in ["cmd", "ps1"] {
-                        let shim = dir.join(format!("{id}.{suffix}"));
-                        if shim.is_file() {
-                            if let Some(exe) =
-                                windows_native_candidate(id, &shim, std::env::consts::ARCH)
-                            {
-                                return Ok(exe);
-                            }
-                        }
-                    }
-                }
-            }
-            Err(format!("{id} 공식 native CLI 설치가 필요합니다. npm 셸 래퍼만 있는 설치는 지원하지 않습니다."))
+            return Err(
+                "실행 또는 터미널 준비가 진행 중입니다. 종료한 뒤 Codex 경로를 변경하세요.".into(),
+            );
         }
-        #[cfg(not(windows))]
-        {
-            which::which_in(id, path, std::env::current_dir().unwrap_or_default())
-                .map_err(|_| format!("{id} 공식 CLI 설치가 필요합니다."))?
-                .canonicalize()
-                .map_err(|e| e.to_string())
-        }
+        *self.inner.codex.lock().map_err(lock_error)? = resolved.clone();
+        Ok(json!({"ok":true,"path":resolved,"detectedPath":detected,"version":version}))
     }
 
     fn provider(&self, id: &str) -> Value {
@@ -479,7 +522,7 @@ impl Runtime {
         };
         let version = capture(&bin, &["--version"], Duration::from_secs(5));
         let Ok((true, version)) = version else {
-            return json!({"id":id,"installed":false,"connected":false,"label":"CLI 실행 확인 실패"});
+            return json!({"id":id,"installed":false,"connected":false,"label":"CLI 실행 확인 실패","path":bin});
         };
         let args = if id == "codex" {
             vec!["login", "status"]
@@ -496,7 +539,7 @@ impl Runtime {
                     .map(|v| v["loggedIn"] == true && v["authMethod"] == "claude.ai")
                     .unwrap_or(false)
             };
-        json!({"id":id,"installed":true,"connected":connected,"version":version.trim(),"label":if connected {if id=="codex"{"ChatGPT 구독 연결"}else{"Claude 구독 연결"}}else{"구독 로그인 필요"},"mode":if id=="codex"{"chat-and-terminal"}else{"official-terminal"},"remaining":null})
+        json!({"id":id,"installed":true,"connected":connected,"path":bin,"version":version.trim(),"label":if connected {if id=="codex"{"ChatGPT 구독 연결"}else{"Claude 구독 연결"}}else{"구독 로그인 필요"},"mode":if id=="codex"{"chat-and-terminal"}else{"official-terminal"},"remaining":null})
     }
     pub fn providers(&self) -> ResultValue {
         Ok(json!([self.provider("codex"), self.provider("claude")]))
@@ -1753,7 +1796,7 @@ esac
         let (tx, rx) = mpsc::channel();
         let rt = Runtime::new(
             prepared_rt.inner.store.clone(),
-            prepared_rt.inner.codex.clone(),
+            prepared_rt.inner.codex.lock().unwrap().clone(),
             Arc::new(move |_, event| {
                 if event["closed"] == true {
                     let _ = tx.send(event);
@@ -1925,6 +1968,74 @@ esac
             .unwrap()
             .api("POST", &route, Value::Null)
             .is_ok());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn codex_path_selection_validates_version_and_preserves_previous_on_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("official-codex-fixture");
+        std::fs::write(&bin,"#!/bin/sh\ncase \"$1\" in --version) echo codex-cli-fixture-0.163;; login) echo 'Logged in using ChatGPT';; *) exit 88;; esac\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let rt = Runtime::new(
+            Arc::new(Mutex::new(Store::open(&dir.path().join("data")).unwrap())),
+            None,
+            Arc::new(|_, _| {}),
+        );
+        let result = rt.set_codex_path(Some(bin.clone())).unwrap();
+        assert_eq!(result["path"], json!(bin.canonicalize().unwrap()));
+        assert_eq!(result["version"], "codex-cli-fixture-0.163");
+        assert_eq!(rt.provider("codex")["path"], result["path"]);
+        assert!(rt.set_codex_path(Some(dir.path().join("missing"))).is_err());
+        assert_eq!(rt.binary("codex").unwrap(), bin.canonicalize().unwrap());
+        let broken = dir.path().join("broken");
+        std::fs::write(&broken, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(rt.set_codex_path(Some(broken)).is_err());
+        assert_eq!(rt.binary("codex").unwrap(), bin.canonicalize().unwrap());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn codex_path_change_refuses_prepared_and_opening_sessions() {
+        let (dir, rt, prepared) = prepared_terminal_fixture();
+        let bin = dir.path().join("fake-codex");
+        assert!(rt
+            .set_codex_path(Some(bin.clone()))
+            .unwrap_err()
+            .contains("진행 중"));
+        rt.terminal_close(strv(&prepared, "ticket")).unwrap();
+        rt.inner
+            .opening
+            .lock()
+            .unwrap()
+            .insert("opening".into(), Arc::new(AtomicBool::new(false)));
+        assert!(rt
+            .set_codex_path(Some(bin.clone()))
+            .unwrap_err()
+            .contains("진행 중"));
+        rt.inner.opening.lock().unwrap().clear();
+        let project = rt
+            .inner
+            .store
+            .lock()
+            .unwrap()
+            .get(strv(&prepared["workspace"], "id"), "workspace")
+            .unwrap()["projectId"]
+            .clone();
+        let run = rt
+            .start("test", json!({"projectId":project,"command":"sleep 30"}))
+            .unwrap();
+        assert!(rt
+            .set_codex_path(Some(bin.clone()))
+            .unwrap_err()
+            .contains("진행 중"));
+        rt.cancel(strv(&run, "id")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !rt.inner.active.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(rt.set_codex_path(Some(bin)).unwrap()["ok"], true);
     }
     #[test]
     fn windows_npm_shims_resolve_only_matching_native_payloads() {
