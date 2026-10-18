@@ -124,12 +124,9 @@ async fn save_export(
     .map_err(|e| e.to_string())?
 }
 fn seed(store: &mut Store, root: &std::path::Path) -> Result<(), String> {
-    let state = store.api("GET", "/state", Value::Null)?;
-    if state["projects"]
-        .as_array()
-        .map(|x| x.is_empty())
-        .unwrap_or(true)
-    {
+    // Window startup must not read external project files (OS permission prompts
+    // or unavailable volumes can block). Validate provenance after UI startup.
+    if store.all("project")?.is_empty() {
         let demo = root.join("demo");
         std::fs::create_dir_all(&demo).map_err(|e| e.to_string())?;
         std::fs::write(
