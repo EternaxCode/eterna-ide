@@ -26,6 +26,7 @@ pub struct Runtime {
 struct Inner {
     store: Arc<Mutex<Store>>,
     codex: Mutex<Option<PathBuf>>,
+    catalogs: Mutex<HashMap<String, (Instant, Value)>>,
     emit: Emit,
     active: Mutex<HashMap<String, Active>>,
     tickets: Mutex<HashMap<String, Ticket>>,
@@ -46,6 +47,8 @@ struct Ticket {
     cwd: PathBuf,
     workspace: Value,
     model: String,
+    effort: String,
+    permission: String,
     run_id: Option<String>,
 }
 struct Terminal {
@@ -188,7 +191,7 @@ fn command(bin: &Path) -> Command {
     }
     c
 }
-fn kill_tree(pid: u32) {
+pub(super) fn kill_tree(pid: u32) {
     #[cfg(unix)]
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
@@ -356,7 +359,7 @@ fn capture_cancellable(
         thread::sleep(Duration::from_millis(20));
     }
 }
-fn codex_args(model: &str) -> Vec<String> {
+fn codex_args(model: &str, effort: &str, permission: &str) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = [
         "exec",
         "--ignore-user-config",
@@ -366,17 +369,15 @@ fn codex_args(model: &str) -> Vec<String> {
         "--json",
         "--color",
         "never",
-        "--sandbox",
-        "read-only",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect();
-    if !model.is_empty() {
-        args.extend(["--model".into(), model.into()]);
-    }
+    args.extend(crate::models::flags(
+        "codex", model, effort, permission, false,
+    )?);
     args.push("-".into());
-    args
+    Ok(args)
 }
 
 fn failure(text: &str) -> &'static str {
@@ -464,6 +465,7 @@ impl Runtime {
             inner: Arc::new(Inner {
                 store,
                 codex: Mutex::new(codex),
+                catalogs: Mutex::new(HashMap::new()),
                 emit,
                 active: Mutex::new(HashMap::new()),
                 tickets: Mutex::new(HashMap::new()),
@@ -541,6 +543,41 @@ impl Runtime {
             };
         json!({"id":id,"installed":true,"connected":connected,"path":bin,"version":version.trim(),"label":if connected {if id=="codex"{"ChatGPT 구독 연결"}else{"Claude 구독 연결"}}else{"구독 로그인 필요"},"mode":if id=="codex"{"chat-and-terminal"}else{"official-terminal"},"remaining":null})
     }
+    pub fn models(&self, id: &str, refresh: bool) -> ResultValue {
+        if !["codex", "claude"].contains(&id) {
+            return Err("지원하지 않는 제공사".into());
+        }
+        let bin = self.binary(id)?;
+        let key = format!("{id}:{}", bin.display());
+        let mut cache = self.inner.catalogs.lock().map_err(lock_error)?;
+        if !refresh {
+            if let Some((at, v)) = cache.get(&key) {
+                if at.elapsed() < Duration::from_secs(60) {
+                    return Ok(v.clone());
+                }
+            }
+        }
+        let result = crate::models::discover(command(&bin), id)?;
+        cache.insert(key, (Instant::now(), result.clone()));
+        Ok(result)
+    }
+    fn validate_selection(&self, id: &str, body: &Value) -> Result<(), String> {
+        crate::models::flags(
+            id,
+            strv(body, "model"),
+            strv(body, "effort"),
+            body["permission"].as_str().unwrap_or("full"),
+            true,
+        )?;
+        if !strv(body, "model").is_empty() || !strv(body, "effort").is_empty() {
+            crate::models::validate(
+                &self.models(id, false)?,
+                strv(body, "model"),
+                strv(body, "effort"),
+            )?;
+        }
+        Ok(())
+    }
     pub fn providers(&self) -> ResultValue {
         Ok(json!([self.provider("codex"), self.provider("claude")]))
     }
@@ -566,6 +603,7 @@ impl Runtime {
         let project = required(&body, "projectId")?;
         if kind == "ai" {
             self.ensure_login("codex")?;
+            self.validate_selection("codex", &body)?;
         }
         let mut active = self.inner.active.lock().map_err(lock_error)?;
         if active.values().any(|a| a.project == project) {
@@ -585,7 +623,11 @@ impl Runtime {
         };
         let mut process = if kind == "ai" {
             let mut c = command(&self.binary("codex")?);
-            c.args(codex_args(strv(&body, "model")));
+            c.args(codex_args(
+                strv(&body, "model"),
+                strv(&body, "effort"),
+                body["permission"].as_str().unwrap_or("full"),
+            )?);
             c
         } else {
             shell_command(&cmd)
@@ -596,7 +638,7 @@ impl Runtime {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = process.spawn().map_err(|e| format!("실행 실패: {e}"))?;
-        let run=match store.create("run",json!({"projectId":project,"goal":strv(&body,"goal"),"kind":kind,"provider":if kind=="ai"{"codex"}else{"local"},"status":"running","answer":"","output":"","contextId":context["id"],"command":cmd})) {Ok(v)=>v,Err(e)=>{kill_tree(child.id());let _=child.wait();return Err(e)}};
+        let run=match store.create("run",json!({"projectId":project,"goal":strv(&body,"goal"),"kind":kind,"provider":if kind=="ai"{"codex"}else{"local"},"status":"running","answer":"","output":"","contextId":context["id"],"model":body["model"],"effort":body["effort"],"permission":body["permission"].as_str().unwrap_or("full"),"command":cmd})) {Ok(v)=>v,Err(e)=>{kill_tree(child.id());let _=child.wait();return Err(e)}};
         let id = required(&run, "id")?;
         let stop = Arc::new(AtomicBool::new(false));
         active.insert(
@@ -866,6 +908,7 @@ impl Runtime {
         }
         if action == "work" {
             self.ensure_login(&provider)?;
+            self.validate_selection(&provider, &body)?;
         }
         let project = required(&body, "projectId")?;
         let mut tickets = self.inner.tickets.lock().map_err(lock_error)?;
@@ -921,7 +964,7 @@ impl Runtime {
         }
         // The workspace and its durable reservation become visible under the same Store lock.
         let run_id = if action == "work" {
-            let run=s.create("run",json!({"projectId":project,"kind":"terminal","provider":provider,"status":"starting","goal":context["goal"],"contextId":context["id"],"workspaceId":workspace["id"],"answer":"","output":"공식 CLI 터미널 준비 중. 내부 도구 호출은 관측되지 않음."}))?;
+            let run=s.create("run",json!({"projectId":project,"kind":"terminal","provider":provider,"model":body["model"],"effort":body["effort"],"permission":body["permission"].as_str().unwrap_or("full"),"status":"starting","goal":context["goal"],"contextId":context["id"],"workspaceId":workspace["id"],"answer":"","output":"공식 CLI 터미널 준비 중. 내부 도구 호출은 관측되지 않음."}))?;
             Some(required(&run, "id")?)
         } else {
             None
@@ -937,6 +980,8 @@ impl Runtime {
                 cwd,
                 workspace,
                 model: strv(&body, "model").into(),
+                effort: strv(&body, "effort").into(),
+                permission: body["permission"].as_str().unwrap_or("full").into(),
                 run_id,
             },
         );
@@ -1047,14 +1092,8 @@ impl Runtime {
                     "plugins",
                     "-c",
                     "model_provider=\"openai\"",
-                    "--ask-for-approval",
-                    "on-request",
-                    "--sandbox",
-                    "workspace-write",
                 ]);
-                if !t.model.is_empty() {
-                    cmd.args(["--model", &t.model]);
-                }
+
                 let (ok, text) = capture_cancellable(
                     &bin,
                     &[
@@ -1087,8 +1126,15 @@ impl Runtime {
                     cmd.arg(format!("mcp_servers.{name}.enabled=false"));
                 }
             } else {
-                cmd.args(["--safe-mode", "--permission-mode", "manual"]);
+                cmd.arg("--safe-mode");
             }
+            cmd.args(crate::models::flags(
+                &t.provider,
+                &t.model,
+                &t.effort,
+                &t.permission,
+                true,
+            )?);
             cmd.arg("먼저 .nexus/context.md를 읽으세요. 공통 자료와 사용자 목표를 확인하고 작업 사본에서 수행하세요. 원본 경로를 찾아 수정하지 마세요. 결과를 한국어로 설명하세요.");
         }
         // Serialize the final check, process spawn, and live-session publication with close/shutdown.
@@ -1431,6 +1477,22 @@ fn shell_command(script: &str) -> Command {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires installed official CLIs; metadata only, no inference"]
+    fn live_model_discovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = Runtime::new(
+            Arc::new(Mutex::new(Store::open(dir.path()).unwrap())),
+            std::env::var_os("ETERNA_CODEX_BIN").map(PathBuf::from),
+            Arc::new(|_, _| {}),
+        );
+        for id in ["codex", "claude"] {
+            let c = rt.models(id, true).unwrap();
+            assert!(c["models"].as_array().unwrap().len() > 0);
+            assert!(!c.to_string().contains("subscriptionType"));
+            println!("{id}: {} models", c["models"].as_array().unwrap().len());
+        }
+    }
+    #[test]
     fn observable_events_exclude_private_reasoning() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(Store::open(dir.path()).unwrap()));
@@ -1724,6 +1786,8 @@ esac
                     cwd: dir.path().into(),
                     workspace: json!({"id":"workspace"}),
                     model: String::new(),
+                    effort: String::new(),
+                    permission: "full".into(),
                     run_id: None,
                 },
             );
@@ -2099,7 +2163,7 @@ esac
     }
     #[test]
     fn read_only_cli_contract() {
-        let args = codex_args("");
+        let args = codex_args("", "", "restricted").unwrap();
         assert!(args.contains(&"--ignore-user-config".into()));
         assert!(args.contains(&"read-only".into()));
         assert!(!args.contains(&"--dangerously-bypass-approvals-and-sandbox".into()));

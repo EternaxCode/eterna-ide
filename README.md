@@ -22,7 +22,8 @@ A native Windows/macOS AI workspace that connects code, decisions, evidence, and
 - **Keep memory current:** records reference source hashes; changed evidence becomes stale. Revoked or outdated knowledge is excluded from inherited answers too.
 - **Work in source snapshots:** coding terminals edit a separate source copy. Review and apply individual files without silently overwriting concurrent original edits.
 - **Keep an execution trail:** local tests, exit codes, context snapshots, interruption status, and persistent history.
-- **Use official authentication:** bundled official Codex CLI with ChatGPT login, and installed official Claude Code in an integrated terminal. No extracted OAuth tokens or silent API-key fallback.
+- **Choose models and effort:** provider-specific selectors use live official CLI catalogs, with independent saved settings and supported-effort validation. Full access is the default; restricted mode is selectable. Full-access Codex chat can edit the current project and run commands.
+- **Use official authentication:** installed official Codex CLI with ChatGPT login, and installed official Claude Code in an integrated terminal. No extracted OAuth tokens or silent API-key fallback.
 
 ## Install the desktop app
 

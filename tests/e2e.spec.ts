@@ -36,3 +36,19 @@ test('history pagination is single-flight and old workspaces remain reviewable',
  await page.getByRole('button',{name:'이전 기록 더 보기'}).click();await expect(page.locator('.run-row')).toHaveCount(300);expect(offsets).toEqual([100,200]);
  await page.locator('.run-row').last().click();await expect(page.getByRole('button',{name:'이 작업의 변경 검토'})).toBeVisible();
 });
+
+test('provider model selectors persist independently, reset incompatible effort, and send full access',async({page})=>{
+ await page.route('**/api/models/**',route=>{const claude=route.request().url().includes('/claude');return route.fulfill({json:{source:'official-cli',models:claude?[{id:'opus-test',label:'Test Opus',efforts:['low','max']},{id:'haiku-test',label:'Test Haiku',efforts:[]}]:[{id:'gpt-test',label:'Test GPT',efforts:['low','high','ultra'],defaultEffort:'low'}]}});});
+ await page.goto('/#token=e2e-test-token');
+ await expect(page.getByLabel('Codex 권한',{exact:true})).toHaveValue('full');
+ await page.getByLabel('Codex Model',{exact:true}).selectOption('gpt-test');await page.getByLabel('Codex Effort',{exact:true}).selectOption('ultra');
+ await page.getByLabel('AI 모델 공급사').selectOption('claude');await expect(page.getByLabel('Claude 권한',{exact:true})).toHaveValue('full');
+ await page.getByLabel('Claude Model',{exact:true}).selectOption('opus-test');await page.getByLabel('Claude Effort',{exact:true}).selectOption('max');
+ await page.getByLabel('Claude Model',{exact:true}).selectOption('haiku-test');await expect(page.getByLabel('Claude Effort',{exact:true})).toBeDisabled();await expect(page.getByLabel('Claude Effort',{exact:true})).toHaveValue('');
+ await page.getByLabel('Claude Model',{exact:true}).selectOption('opus-test');await page.getByLabel('Claude Effort',{exact:true}).selectOption('low');
+ await page.reload();await expect(page.getByLabel('Codex Model',{exact:true})).toHaveValue('gpt-test');await expect(page.getByLabel('Codex Effort',{exact:true})).toHaveValue('ultra');
+ await page.getByLabel('AI 모델 공급사').selectOption('claude');await expect(page.getByLabel('Claude Model',{exact:true})).toHaveValue('opus-test');await expect(page.getByLabel('Claude Effort',{exact:true})).toHaveValue('low');
+ let body:any;await page.route('**/api/terminal',async route=>{body=route.request().postDataJSON();await route.fulfill({status:400,json:{error:'test: intercepted before CLI execution'}});});
+ await page.getByLabel('AI 작업 요청').fill('선택 설정 전달 검증');await page.getByRole('button',{name:'AI 실행',exact:true}).click();await expect.poll(()=>body).toMatchObject({provider:'claude',model:'opus-test',effort:'low',permission:'full'});
+ await page.getByRole('button',{name:'모델 연결',exact:true}).click();await page.screenshot({path:'artifacts/model-selectors.png',fullPage:true});
+});

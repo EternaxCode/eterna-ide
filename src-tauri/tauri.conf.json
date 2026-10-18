@@ -1,12 +1,46 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Eterna IDE",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "identifier": "com.eternaxcode.eterna",
-  "build": {"beforeDevCommand":"npm run desktop:ui", "devUrl":"http://localhost:1420", "beforeBuildCommand":"npm run build", "frontendDist":"../dist"},
+  "build": {
+    "beforeDevCommand": "npm run desktop:ui",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
   "app": {
     "windows": [],
-    "security": {"csp":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; worker-src 'self' blob:; object-src 'none'; frame-src 'none'"}
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; worker-src 'self' blob:; object-src 'none'; frame-src 'none'"
+    }
   },
-  "bundle": {"active":true,"targets":"all","icon":["icons/32x32.png","icons/128x128.png","icons/128x128@2x.png","icons/icon.icns","icons/icon.ico"],"category":"DeveloperTool","shortDescription":"작업 기억이 이어지는 로컬 AI IDE","copyright":"Copyright © 2026 EternaxCode","macOS":{"minimumSystemVersion":"12.0","signingIdentity":"-"},"windows":{"nsis":{"installMode":"currentUser","languages":["Korean","English"],"displayLanguageSelector":true}}}
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "\uc791\uc5c5 \uae30\uc5b5\uc774 \uc774\uc5b4\uc9c0\ub294 \ub85c\uceec AI IDE",
+    "copyright": "Copyright \u00a9 2026 EternaxCode",
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "Korean",
+          "English"
+        ],
+        "displayLanguageSelector": true
+      }
+    }
+  }
 }
