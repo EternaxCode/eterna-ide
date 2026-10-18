@@ -16,7 +16,7 @@ export class Runner {
  start({project,goal,kind='ai',context,model='',command=''}){
  if([...this.active.values()].some(x=>x.projectId===project.id))throw Object.assign(new Error('이 프로젝트에서 이미 실행 중입니다. 먼저 중단하거나 기다려주세요.'),{status:409});
  const run=this.store.create('run',{projectId:project.id,goal,kind,provider:kind==='ai'?'codex':'local',status:'running',answer:'',output:'',context:context??null,command,events:[]});
- const child=spawn(kind==='ai'?codexBinary:'/bin/zsh',kind==='ai'?codexArgs(model):['-c',command],{cwd:project.path,env:cleanEnv(),detached:true,stdio:['pipe','pipe','pipe']});
+ const child=spawn(kind==='ai'?codexBinary:(process.platform==='darwin'?'/bin/zsh':'/bin/sh'),kind==='ai'?codexArgs(model):['-c',command],{cwd:project.path,env:cleanEnv(),detached:true,stdio:['pipe','pipe','pipe']});
  const entry={child,projectId:project.id,reason:null};this.active.set(run.id,entry);let answer='',output='',line='',events=[],exitError='',success=false;let ended=false;
  const flush=()=>{if(!ended)this.store.update('run',run.id,{answer,output,events:events.slice(-80)});};
  const timer=setTimeout(()=>this.stop(run.id,'timed_out'),kind==='ai'?180000:120000);const pulse=setInterval(flush,500);

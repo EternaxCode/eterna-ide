@@ -30,7 +30,7 @@ const contextSchema=z.object({projectId:uuid,goal:z.string().trim().min(1).max(1
 app.get('/api/state',(req,res)=>{
  const notes=refreshNotes(store),etag=`"${instanceId}-${store.revision}"`;res.setHeader('ETag',etag);
  if(req.headers['if-none-match']===etag)return res.status(304).end();
- res.json({projects:store.projects(),notes,edges:store.all('edge'),workspaces:store.summaries('workspace',100),runs:store.summaries('run',100),runCount:store.count('run'),version:'0.2.0'});
+ res.json({projects:store.projects(),notes,edges:store.all('edge'),workspaces:store.summaries('workspace',100),runs:store.summaries('run',100),runCount:store.count('run'),version:'0.2.1'});
 });
 app.get('/api/runs',(req,res)=>{const offset=z.coerce.number().int().min(0).max(1000000).parse(req.query.offset||0);res.json(store.summaries('run',100,offset));});
 app.get('/api/providers',async(req,res)=>res.json(await providerStatus()));
