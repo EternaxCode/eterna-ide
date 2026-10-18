@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 const now=()=>new Date().toISOString();
 export class Store {
  constructor(path){
-  this.db=new DatabaseSync(path);this.revision=0;this.cache=new Map();
+  this.path=path;this.db=new DatabaseSync(path);this.revision=0;this.cache=new Map();
   this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
    CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, type TEXT NOT NULL, data TEXT NOT NULL);
    CREATE INDEX IF NOT EXISTS records_type ON records(type);
@@ -13,7 +13,7 @@ export class Store {
   for(const row of this.db.prepare("SELECT r.data,r.type FROM records r LEFT JOIN record_summaries s ON r.id=s.id WHERE r.type IN ('run','workspace') AND s.id IS NULL ORDER BY r.rowid").all())this.writeSummary(row.type,JSON.parse(row.data));
  }
  writeSummary(type,data){if(!['run','workspace'].includes(type))return;let summary;
-  if(type==='run'){const {context,output,answer,...rest}=data;summary={...rest,answer:answer?.slice(0,8000),answerTruncated:(answer?.length||0)>8000,output:output?.slice(-4000),contextId:context?.id};}
+  if(type==='run'){const {context,output,answer,memoryCapture,...rest}=data;summary={...rest,...(memoryCapture?{memoryCapture:{status:memoryCapture.status,source:memoryCapture.source,noteIds:memoryCapture.noteIds}}:{}),answer:answer?.slice(0,8000),answerTruncated:(answer?.length||0)>8000,output:output?.slice(-4000),contextId:context?.id};}
   else{const {baseline,...rest}=data;summary=rest;}
   this.db.prepare('INSERT INTO record_summaries VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(data.id,type,JSON.stringify(summary));
  }
@@ -24,10 +24,12 @@ export class Store {
  invalidate(type){this.revision++;for(const key of this.cache.keys())if(key===`all:${type}`||key.startsWith(`summary:${type}:`))this.cache.delete(key);}
  put(type,data){this.db.exec('SAVEPOINT record_write');try{this.db.prepare('INSERT INTO records(id,type,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(data.id,type,JSON.stringify(data));this.writeSummary(type,data);this.db.exec('RELEASE record_write');}catch(e){this.db.exec('ROLLBACK TO record_write; RELEASE record_write');throw e;}this.invalidate(type);return data;}
  create(type,data){return this.put(type,{...data,id:randomUUID(),createdAt:now(),updatedAt:now(),version:1});}
- update(type,id,patch,version){const old=this.get(id,type);if(version!==undefined&&old.version!==version)throw Object.assign(new Error('다른 작업에서 변경했습니다. 새로고침 후 다시 시도하세요.'),{status:409});return this.put(type,{...old,...patch,id,createdAt:old.createdAt,version:old.version+1,updatedAt:now()});}
+ update(type,id,patch,version){const old=this.get(id,type);if(version!==undefined&&old.version!==version)throw Object.assign(new Error('다른 작업에서 변경했습니다. 새로고침 후 다시 시도하세요.'),{status:409});this.db.exec('SAVEPOINT note_update');try{if(type==='note')this.create('noteRevision',{noteId:id,snapshot:old});const result=this.put(type,{...old,...patch,id,createdAt:old.createdAt,version:old.version+1,updatedAt:now()});this.db.exec('RELEASE note_update');return result;}catch(e){this.db.exec('ROLLBACK TO note_update; RELEASE note_update');this.cache.clear();throw e;}}
  delete(type,id){this.get(id,type);this.db.exec('SAVEPOINT record_delete');try{this.db.prepare('DELETE FROM records WHERE id=? AND type=?').run(id,type);this.db.prepare('DELETE FROM record_summaries WHERE id=?').run(id);this.db.exec('RELEASE record_delete');}catch(e){this.db.exec('ROLLBACK TO record_delete; RELEASE record_delete');throw e;}this.invalidate(type);}
  projects(){return this.all('project');}
  addProject(name,path){const existing=this.projects().find(p=>p.path===path);return existing??this.create('project',{name,path});}
+ scopedNotes(projectId,shared=false){return this.db.prepare("SELECT data FROM records WHERE type='note' AND (json_extract(data,'$.projectId')=? OR (? AND json_extract(data,'$.shared')=1)) ORDER BY rowid DESC").all(projectId,Number(shared)).map(r=>JSON.parse(r.data));}
+ noteValidationMetadata(){return new Map(this.db.prepare("SELECT data FROM records WHERE type='note'").all().map(row=>{const raw=JSON.parse(row.data),metadata={};for(const k of ['id','version','projectId','status','shared','archived','automatic','sourceRunIds','requiresSharedContext'])if(k in raw)metadata[k]=raw[k];return [raw.id,metadata];}));}
  notes(){return this.all('note');}
  addNote(data){return this.create('note',data);}
  runs(){return this.all('run');}

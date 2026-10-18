@@ -1,3 +1,5 @@
+import {captureMemory,memoryReview,archiveNote,noteHistory} from './learning.mjs';
+import {createProject} from './projects.mjs';
 import {modelCatalog,validateSelection} from './models.mjs';
 import express from 'express';
 import { createServer } from 'node:http';
@@ -20,7 +22,7 @@ const instanceId=randomBytes(8).toString('hex');
 const token=process.env.NEXUS_TEST_TOKEN||randomBytes(32).toString('hex');
 const store=new Store(join(data,'nexus.sqlite'));store.recover();
 if(store.projects().length===0){const p=store.addProject('시작 프로젝트',join(root,'demo'));store.addNote({projectId:p.id,title:'Eterna에 오신 것을 환영합니다',body:'작업 중 발견한 결정과 교훈을 이곳에 남겨보세요. GPT와 Claude가 같은 기록을 참고합니다. 코드와 연결하면 변경 후 재검증 상태를 확인할 수 있습니다.',kind:'decision',status:'verified',shared:false,sourcePath:'README.md',sourceHash:readFile(p.path,'README.md').hash,author:'user'});}
-const app=express(),server=createServer(app),runner=new Runner(store),terminal=terminals(server,{store,port});
+const app=express(),server=createServer(app),runner=new Runner(store),terminal=terminals(server,{store,port,dataDir:data});
 const origins=[`http://127.0.0.1:${port}`,`http://localhost:${port}`];
 app.use((req,res,next)=>{if(![`127.0.0.1:${port}`,`localhost:${port}`].includes(req.headers.host))return res.status(403).json({error:'로컬 접속만 허용합니다.'});res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');if(req.headers.origin&&!origins.includes(req.headers.origin))return res.status(403).json({error:'다른 사이트의 요청은 허용하지 않습니다.'});next();});
 app.use('/api',(req,res,next)=>{res.setHeader('Cache-Control','no-store');const provided=Buffer.from(req.headers.authorization?.replace(/^Bearer /,'')||'');const expected=Buffer.from(token);if(provided.length!==expected.length||!timingSafeEqual(provided,expected))return res.status(401).json({error:'앱 실행 링크로 다시 접속하세요.'});next();});
@@ -36,6 +38,7 @@ app.get('/api/state',(req,res)=>{
 app.get('/api/runs',(req,res)=>{const offset=z.coerce.number().int().min(0).max(1000000).parse(req.query.offset||0);res.json(store.summaries('run',100,offset));});
 app.get('/api/models/:provider',async(req,res)=>res.json(await modelCatalog(req.params.provider,req.query.refresh==='1')));
 app.get('/api/providers',async(req,res)=>res.json(await providerStatus()));
+app.post('/api/projects/create',(req,res)=>res.json(createProject(store,z.object({name:z.string(),parentPath:z.string(),folderName:z.string(),template:z.enum(['empty','javascript','python'])}).parse(req.body))));
 app.post('/api/projects',(req,res)=>{const input=z.object({name:str,path:z.string().min(1).max(2000)}).parse(req.body);const path=realpathSync(input.path);if(!statSync(path).isDirectory()||path==='/'||path===homedir())throw new Error('프로젝트 폴더를 선택하세요. 홈 전체는 등록할 수 없습니다.');res.json(store.addProject(input.name,path));});
 app.get('/api/projects/:id/files',(req,res)=>res.json(listFiles(store.get(req.params.id,'project').path)));
 app.get('/api/projects/:id/file',(req,res)=>res.json(readFile(store.get(req.params.id,'project').path,String(req.query.path||''))));
@@ -43,7 +46,12 @@ app.put('/api/projects/:id/file',(req,res)=>{const b=z.object({path:str,content:
 function noteInput(body){const b=noteSchema.parse(body);const p=store.get(b.projectId,'project');return {...b,sourcePath:b.sourcePath||null,sourceHash:b.sourcePath?readFile(p.path,b.sourcePath).hash:null,author:b.author||'user'};}
 app.post('/api/notes',(req,res)=>res.json(store.addNote(noteInput(req.body))));
 app.put('/api/notes/:id',(req,res)=>res.json(store.update('note',req.params.id,noteInput(req.body),z.number().int().parse(req.body.version))));
-app.delete('/api/notes/:id',(req,res)=>{store.delete('note',req.params.id);for(const e of store.all('edge'))if(e.from===req.params.id||e.to===req.params.id)store.delete('edge',e.id);res.json({ok:true});});
+app.delete('/api/notes/:id',(req,res)=>res.json(archiveNote(store,req.params.id,req.body?.version,true)));
+app.post('/api/notes/:id/archive',(req,res)=>res.json(archiveNote(store,req.params.id,req.body.version,true)));
+app.post('/api/notes/:id/restore',(req,res)=>res.json(archiveNote(store,req.params.id,req.body.version,false)));
+app.get('/api/notes/:id/history',(req,res)=>res.json(noteHistory(store,req.params.id)));
+app.post('/api/projects/:id/memory-review',(req,res)=>res.json(memoryReview(store,req.params.id)));
+app.post('/api/runs/:id/memory',(req,res)=>res.json(captureMemory(store,req.params.id)));
 app.post('/api/edges',(req,res)=>{const e=z.object({from:uuid,to:uuid,label:str}).parse(req.body);store.get(e.from,'note');store.get(e.to,'note');if(e.from===e.to)throw new Error('서로 다른 기록을 연결하세요.');res.json(store.create('edge',e));});
 app.delete('/api/edges/:id',(req,res)=>{store.delete('edge',req.params.id);res.json({ok:true});});
 app.post('/api/context',(req,res)=>{const b=contextSchema.parse(req.body);res.json(buildContext(store,b.projectId,b.goal,b.paths,b.includeShared,b));});

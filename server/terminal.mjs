@@ -1,3 +1,4 @@
+import {captureMemory} from './learning.mjs';
 import {selectionFlags} from './models.mjs';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
@@ -20,7 +21,7 @@ export function terminals(server,{store,port}){
   const timeout=setTimeout(()=>{ws.send('\r\n세션 시간 제한(2시간)에 도달했습니다.');stop();},7200000);
   term.onData(data=>{outputBytes+=data.length;if(ws.readyState===1)ws.send(data);if(outputBytes>20e6){stop();}});
   ws.on('message',raw=>{try{const m=JSON.parse(raw.toString());if(m.type==='input'&&typeof m.data==='string')term.write(m.data.slice(0,65536));if(m.type==='resize')term.resize(Math.min(300,Math.max(20,Number(m.cols)||80)),Math.min(100,Math.max(5,Number(m.rows)||24)));}catch{}});
-  term.onExit(({exitCode})=>{clearTimeout(timeout);live.delete(term);if(run)store.update('run',run.id,{status:'session_ended',exitCode,finishedAt:new Date().toISOString()});if(ws.readyState===1){ws.send(`\r\n\r\n[세션 종료 · exit ${exitCode}]`);ws.close();}});
+  term.onExit(({exitCode})=>{clearTimeout(timeout);live.delete(term);if(run){store.update('run',run.id,{status:'session_ended',exitCode,finishedAt:new Date().toISOString()});try{captureMemory(store,run.id,{readTerminal:true});}catch{/* Preserve terminal final status on capture errors. */}}if(ws.readyState===1){ws.send(`\r\n\r\n[세션 종료 · exit ${exitCode}]`);ws.close();}});
   ws.on('close',()=>{clearTimeout(timeout);stop();});
  });});
  return {ticket,shutdown(){for(const t of live)t.stopNexus();wss.close();clearInterval(sweep);}};

@@ -799,6 +799,7 @@ impl Runtime {
         };
         if let Ok(mut s) = self.inner.store.lock() {
             let _=s.update("run",&id,json!({"answer":answer,"output":output,"status":status,"error":if status=="completed"{Value::Null}else{json!(if status=="timed_out"{timeout_message(&kind)}else if error.is_empty(){format!("{status}: 실행 로그를 확인하세요.")}else{error})},"exitCode":exited.and_then(|s|s.code()),"finishedAt":chrono::Utc::now().to_rfc3339()}));
+            let _ = s.capture_memory(&id, false);
         }
         self.event(
             &id,
@@ -1015,6 +1016,7 @@ impl Runtime {
         if let Some(id) = run_id {
             if let Ok(mut store) = self.inner.store.lock() {
                 let _=store.update("run",id,json!({"status":status,"error":error,"finishedAt":chrono::Utc::now().to_rfc3339()}));
+                let _ = store.capture_memory(id, false);
             }
         }
     }
@@ -1345,6 +1347,9 @@ impl Runtime {
                         "session_ended"
                     };
                     let _=s.update("run",&id,json!({"status":status,"error":if teardown_error{Some("터미널 종료 확인이 시간 제한을 초과했습니다. 실행 기록을 확인하세요.")}else{None},"exitCode":ended,"finishedAt":chrono::Utc::now().to_rfc3339()}));
+                    if status != "running" {
+                        let _ = s.capture_memory(&id, true);
+                    }
                 }
                 rt.event(
                     &id,

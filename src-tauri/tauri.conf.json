@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Eterna IDE",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "identifier": "com.eternaxcode.eterna",
   "build": {
     "beforeDevCommand": "npm run desktop:ui",
@@ -26,8 +26,8 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "\uc791\uc5c5 \uae30\uc5b5\uc774 \uc774\uc5b4\uc9c0\ub294 \ub85c\uceec AI IDE",
-    "copyright": "Copyright \u00a9 2026 EternaxCode",
+    "shortDescription": "작업 기억이 이어지는 로컬 AI IDE",
+    "copyright": "Copyright © 2026 EternaxCode",
     "macOS": {
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-"

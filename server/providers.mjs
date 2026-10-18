@@ -1,3 +1,4 @@
+import {captureMemory} from './learning.mjs';
 import {selectionFlags} from './models.mjs';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +27,7 @@ export class Runner {
  const eventLine=text=>{try{const e=JSON.parse(text);if(e.type==='item.completed'&&e.item?.type==='agent_message')answer+=(answer?'\n\n':'')+e.item.text;if(e.type==='turn.completed')success=true;if(e.type==='turn.failed'||e.type==='error')exitError=e.error?.message||e.message||'AI 실행 실패';if(['turn.started','turn.completed','turn.failed','error'].includes(e.type))events.push({type:e.type,at:new Date().toISOString()});}catch{output=(output+text+'\n').slice(-60000);}};
  child.stdout.on('data',data=>{dirtyOutput=true;if(kind==='test'){output=(output+data.toString()).slice(-60000);return;}line+=data;const parts=line.split('\n');line=parts.pop();for(const l of parts)eventLine(l);if(line.length>2e6)this.stop(run.id,'output_limit');});
  child.stderr.on('data',data=>{dirtyOutput=true;output=(output+data.toString()).slice(-60000);});
- const finish=(code,error)=>{if(ended)return;if(line)eventLine(line);clearTimeout(timer);clearInterval(pulse);ended=true;this.active.delete(run.id);const message=error||exitError;const status=entry.reason||(code===0&&(kind==='test'||success&&!message)?'completed':classifyFailure(message+' '+output));this.store.update('run',run.id,{answer,output,events:events.slice(-80),status,exitCode:code,finishedAt:new Date().toISOString(),error:status==='completed'?null:status==='timed_out'?timeoutMessage(kind):message||`${status}: 실행 로그를 확인하세요.`});};
+ const finish=(code,error)=>{if(ended)return;if(line)eventLine(line);clearTimeout(timer);clearInterval(pulse);ended=true;this.active.delete(run.id);const message=error||exitError;const status=entry.reason||(code===0&&(kind==='test'||success&&!message)?'completed':classifyFailure(message+' '+output));this.store.update('run',run.id,{answer,output,events:events.slice(-80),status,exitCode:code,finishedAt:new Date().toISOString(),error:status==='completed'?null:status==='timed_out'?timeoutMessage(kind):message||`${status}: 실행 로그를 확인하세요.`});try{captureMemory(this.store,run.id);}catch{/* Capture must never change the final process status. */}};
  child.on('error',e=>finish(null,e.message));child.on('close',code=>finish(code));child.stdin.end(kind==='ai'?context.prompt:undefined);return run;
  }
  shutdown(){for(const id of this.active.keys())this.stop(id,'interrupted');}
