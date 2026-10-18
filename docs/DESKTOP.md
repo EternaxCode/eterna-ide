@@ -1,4 +1,4 @@
-# Eterna Desktop 0.3
+# Eterna Desktop 0.3.1
 
 Windows x64와 macOS Apple Silicon용 Tauri 2 / Rust 데스크톱 버전입니다. 화면은 OS WebView에서 렌더링되며, 앱 실행에는 Node 서버나 브라우저가 필요하지 않습니다. 공식 AI CLI와 프로젝트 자체의 개발 도구는 별도로 필요합니다.
 
@@ -27,7 +27,7 @@ GitHub Releases에서 해당 OS 설치 파일을 받으세요. macOS는 DMG의 �
 ## 작업 흐름
 
 1. 네이티브 폴더 선택으로 프로젝트를 연결합니다.
-2. 파일을 편집하거나 읽기 전용 GPT 분석을 요청합니다.
+2. 제공사별 Model, Effort, 권한을 선택한 뒤 작업을 요청합니다. 기본 권한은 전체 액세스이며, Codex 채팅도 현재 프로젝트 파일을 변경하거나 명령을 실행할 수 있습니다. 제한 모드의 Codex 채팅은 읽기 전용입니다.
 3. 코딩 터미널에서 별도 작업 사본을 수정합니다.
 4. 변경 검토에서 파일별로 원본에 적용합니다. 다른 편집기의 변경과 충돌하면 적용하지 않습니다.
 5. 작업 사본을 `저장 공간 절약 · 보관`으로 압축 객체 참조 형태로 보관하고 필요할 때 복원합니다. 실행 중인 사본은 보관할 수 없습니다.
@@ -65,3 +65,13 @@ node scripts/native-smoke.mjs
 개발 시 Rust/Tauri 플랫폼 개발 도구가 필요합니다. 설치 사용자에게 Rust는 필요하지 않습니다. 네이티브 smoke는 임시 데이터 경로에서 실제 실행 파일·IPC·셸·한국어 기록·3D 렌더 프레임을 검증합니다. Windows CI는 NSIS 설치 후 설치된 실행 파일을 검사합니다. CI의 Windows 검증은 일반 사용자의 물리 PC 검증과 구분합니다.
 
 고급 진단용 환경 변수: `ETERNA_DATA_DIR`(독립 테스트 저장소), `ETERNA_CODEX_BIN`(명시적 공식 네이티브 CLI 경로), `ETERNA_IMPORT_LEGACY`(시작 시 읽기 전용 가져오기). 이 변수로 임의의 기존 폴더를 데이터 폴더로 지정하지 마세요.
+
+## 모델·effort·권한 선택
+
+작업실과 모델 연결 화면의 select에서 Codex/Claude 설정을 각각 저장합니다. Codex는 공식 app-server `model/list`, Claude는 공식 CLI 초기화 응답의 `models` / `supportedEffortLevels`를 조회합니다. 임의 모델 목록을 하드코딩하지 않으며, 모델 변경 시 effort를 초기화합니다. 목록 조회는 프롬프트를 보내지 않습니다. 응답의 계정 정보나 인증 정보는 UI·DB에 저장하지 않습니다.
+
+목록은 설치된 CLI 버전 기준이며 실행 시 계정의 모델 권한과 제공사 정책이 적용됩니다. 로그인 또는 CLI 변경 후 목록을 새로고침하세요. 조회 실패 시 공식 CLI 기본값만 사용할 수 있고, 목록에서 사라진 저장된 선택값은 다시 선택해야 합니다.
+
+사용자 요청에 따라 양쪽 기본 권한은 전체 액세스입니다. Codex에는 `--dangerously-bypass-approvals-and-sandbox`, Claude에는 `--dangerously-skip-permissions`를 전달합니다. 제한 모드로 바꾸면 Codex 채팅은 read-only, Codex 터미널은 workspace-write/on-request, Claude는 manual로 실행합니다. OS의 폴더 접근 권한이나 관리자 정책을 변경하는 설정은 아닙니다.
+
+근거: https://learn.chatgpt.com/docs/app-server#list-models-modellist / https://code.claude.com/docs/en/model-config 및 설치된 공식 CLI 메타데이터.

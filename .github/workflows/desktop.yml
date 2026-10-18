@@ -1,5 +1,7 @@
 name: Desktop packages
 on:
+  pull_request:
+    paths: ['src-tauri/**', 'src/**', 'package*.json', '.github/workflows/desktop.yml', 'scripts/native-*']
   workflow_dispatch:
   push:
     branches: [design/desktop-memory-runtime, main]

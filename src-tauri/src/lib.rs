@@ -1,3 +1,4 @@
+pub mod models;
 pub mod runtime;
 pub mod store;
 
@@ -30,6 +31,7 @@ async fn desktop_request(
     let body = body.unwrap_or(Value::Null);
     tauri::async_runtime::spawn_blocking(move||{
   if path=="/desktop-info" {return Ok(json!({"native":true,"platform":std::env::consts::OS,"version":env!("CARGO_PKG_VERSION"),"dataDir":root,"smoke":std::env::var_os("ETERNA_UI_SMOKE").is_some()}));}
+  if path.starts_with("/models/") {let id=path.trim_start_matches("/models/").split('?').next().unwrap_or("");return runtime.models(id,path.contains("refresh=1"));}
   if path=="/providers" {return runtime.providers();}
   if path=="/provider-settings" {
     if method=="GET" {return Ok(store.lock().map_err(|_|"저장소 잠금 오류")?.all("providerSettings")?.first().cloned().unwrap_or(json!({"codexPath":null})));}
@@ -202,7 +204,12 @@ pub fn run() {
                     .map_err(std::io::Error::other)?;
             }
             seed(&mut db, &root).map_err(std::io::Error::other)?;
-            let stored_codex=db.all("providerSettings").map_err(std::io::Error::other)?.first().and_then(|s|s["codexPath"].as_str()).map(PathBuf::from);
+            let stored_codex = db
+                .all("providerSettings")
+                .map_err(std::io::Error::other)?
+                .first()
+                .and_then(|s| s["codexPath"].as_str())
+                .map(PathBuf::from);
             let store = Arc::new(Mutex::new(db));
             let handle = app.handle().clone();
             let emit = Arc::new(move |topic: &str, payload: Value| {
@@ -210,7 +217,9 @@ pub fn run() {
             });
             let runtime = Arc::new(Runtime::new(
                 store.clone(),
-                std::env::var_os("ETERNA_CODEX_BIN").map(PathBuf::from).or(stored_codex),
+                std::env::var_os("ETERNA_CODEX_BIN")
+                    .map(PathBuf::from)
+                    .or(stored_codex),
                 emit,
             ));
             app.manage(Desktop {

@@ -1,3 +1,4 @@
+import {selectionFlags} from './models.mjs';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import * as pty from 'node-pty';
@@ -13,7 +14,7 @@ export function terminals(server,{store,port}){
   const bin=provider==='codex'?codexBinary:'claude';
   const initialPrompt='먼저 .nexus/context.md를 읽으세요. 이 파일에 사용자의 작업 목표, 공유 지식, 선택한 파일과 검증 근거가 있습니다. 작업 사본에서 목표를 수행하고 결과를 한국어로 설명하세요. 원본 경로를 찾아 수정하지 마세요. 의존성 및 바이너리 파일은 사본에서 제외될 수 있습니다.';
   if(action==='work'){mkdirSync(join(project.path,'.nexus'),{recursive:true,mode:0o700});writeFileSync(join(project.path,'.nexus/context.md'),context.prompt,{mode:0o600});}
-  const args=action==='login'?(provider==='codex'?['login']:['auth','login','--claudeai']):provider==='codex'?[...configuredArgs,initialPrompt]:['--safe-mode','--permission-mode','manual',initialPrompt];
+  const args=action==='login'?(provider==='codex'?['login']:['auth','login','--claudeai']):provider==='codex'?[...configuredArgs,initialPrompt]:['--safe-mode',...selectionFlags('claude',config,true),initialPrompt];
   let term;try{term=pty.spawn(bin,args,{name:'xterm-256color',cols:100,rows:28,cwd:project.path,env:cleanEnv()});}catch(e){ws.send(`\r\n실행 실패: ${e.message}`);ws.close();return;}
   live.add(term);let stopping=false;const stop=()=>{if(stopping)return;stopping=true;try{process.kill(-term.pid,'SIGTERM');}catch{try{term.kill('SIGTERM');}catch{}}setTimeout(()=>{try{process.kill(-term.pid,'SIGKILL');}catch{}},2000).unref();};term.stopNexus=stop;let outputBytes=0;const run=action==='login'?null:store.create('run',{projectId:project.id,kind:'terminal',provider,status:'running',goal:context.goal,context,workspaceId,answer:'',output:'공식 CLI 터미널 세션. 출력은 자동으로 지식에 저장되지 않습니다.',events:[]});
   const timeout=setTimeout(()=>{ws.send('\r\n세션 시간 제한(2시간)에 도달했습니다.');stop();},7200000);
