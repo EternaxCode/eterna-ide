@@ -1,81 +1,83 @@
-# Nexus — Local AI IDE
+<div align="center">
 
-내 컴퓨터의 코드, 작업 근거, 배운 점을 연결하는 개인용 AI 작업실입니다.
+# Eterna IDE
 
-## 시작
+**Your models change. Your knowledge stays.**
 
-macOS, Node.js 24.2 이상, Git이 필요합니다. `Nexus IDE.command`를 더블클릭하면 설치·빌드 후 브라우저가 열립니다.
+A local AI workspace that connects code, decisions, evidence, and official coding-agent terminals.
+
+[![CI](https://github.com/EternaxCode/eterna-ide/actions/workflows/ci.yml/badge.svg)](https://github.com/EternaxCode/eterna-ide/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-536f5c.svg)](LICENSE)
+
+[한국어 사용 설명서](docs/README.ko.md) · [Performance](docs/performance/README.md) · [Contributing](CONTRIBUTING.md)
+
+</div>
+
+![Eterna workspace](docs/images/workspace.png)
+
+## What it does
+
+- **Edit and review:** syntax highlighting, local files, optimistic saves, and diff review.
+- **Share knowledge across models:** one evidence-backed knowledge store for GPT/Codex and Claude Code; explicit opt-in for cross-project context.
+- **Keep memory current:** records reference source hashes; changed evidence becomes stale. Revoked or outdated knowledge is excluded from inherited answers too.
+- **Work in source snapshots:** coding terminals edit a separate source copy. Review and apply individual files without silently overwriting concurrent original edits.
+- **Keep an execution trail:** local tests, exit codes, context snapshots, interruption status, and persistent history.
+- **Use official authentication:** bundled official Codex CLI with ChatGPT login, and installed official Claude Code in an integrated terminal. No extracted OAuth tokens or silent API-key fallback.
+
+## Quick start
+
+Requires **macOS, Node.js 24.2+, and Git**. Claude Code is optional. Linux CI validates core/browser behavior; interactive desktop support is currently macOS-first.
 
 ```sh
+git clone https://github.com/EternaxCode/eterna-ide.git
+cd eterna-ide
 npm ci
 npm run launch
 ```
 
-앱은 `127.0.0.1:4317`에서만 수신합니다. 실행 링크의 1회 접속용 fragment를 브라우저 세션 인증으로 사용합니다(토큰 자체는 서버 재시작 전까지 유효). 기본 URL만 열어서 인증 오류가 나면 런처를 다시 실행하세요. 토큰은 `.data/launch-url`에 0600 권한으로 저장됩니다. `.data`와 실행 링크는 공유하거나 Git에 올리지 마세요.
+Or double-click **Eterna IDE.command** after cloning. The launcher builds and opens a local authenticated browser session. The app listens only on `127.0.0.1:4317`.
 
-포그라운드 실행은 `npm start`, 개발 변경 후에는 `npm run dev`를 사용하세요. 백그라운드 앱은 해당 Node 서버 프로세스를 종료하면 멈춥니다. 앱 재실행 시 기록은 유지됩니다.
+1. Add a project using its absolute folder path.
+2. Open a file, inspect the context preview, and ask GPT a question.
+3. For edits, open **코딩 터미널** (coding terminal), then review changes before applying them.
+4. Save decisions and lessons in the knowledge graph.
 
-## 실제 작업 흐름
+The interface is currently Korean. An English UI is not yet included.
 
-1. 왼쪽 `+`에서 프로젝트의 절대 경로를 등록합니다. 처음에는 작은 시작 프로젝트가 들어 있습니다.
-2. 파일을 열어 편집합니다. 변경 비교 버튼으로 diff를 보고 `⌘S`로 저장합니다. 외부에서 바뀐 파일은 덮어쓰지 않습니다.
-3. `배운 점 남기기`에서 결정·교훈·제약·문제를 기록합니다. 현재 파일을 근거로 연결하면 내용 변경 후 `재검증 필요`로 바뀝니다.
-4. GPT 채팅은 공식 `codex exec`를 read-only sandbox로 실행합니다. 파일 선택·근거 미리보기로 전달되는 맥락을 확인하세요. API 키 환경 변수는 전달하지 않습니다.
-5. 코드 수정을 맡길 때 `코딩 터미널`을 엽니다. 공식 Codex 또는 Claude Code가 분리된 소스 사본에서 실행됩니다. 공식 도구의 승인 요청은 터미널에서 직접 응답합니다.
-6. `변경 검토`에서 파일별 diff를 확인하고 원본에 적용합니다. 원본 또는 검토한 사본이 바뀌면 적용을 차단합니다. 원본의 미커밋 작업은 사본 생성 시 포함됩니다.
-7. 작업실의 `테스트 실행`은 현재 원본 프로젝트에서 사용자가 지정한 명령을 실제 실행합니다. 종료 코드와 로그가 실행 기록에 저장됩니다. 최대 2분입니다.
-8. `지식 그래프`에서 기록을 연결·검색하고 Markdown으로 내보냅니다. 모델 교체 시 같은 구조의 공통 맥락을 전달합니다.
+## Connect your subscription
 
-## GPT / ChatGPT 구독 연결
+**GPT / Codex:** use **모델 연결** (model connections) to start the official login. Existing ChatGPT authentication is recognized. The app includes the official Codex CLI without replacing a globally installed copy. The current default model is `gpt-6.1-sol`; availability depends on your account, and the model can be changed in settings.
 
-앱에 포함된 공식 Codex CLI로 `codex login`으로 로그인합니다. 기존 ChatGPT 로그인이 있으면 바로 인식합니다. 앱의 `모델 연결`에서도 공식 로그인 터미널을 열 수 있습니다.
+**Claude Code:** install the [official CLI](https://code.claude.com/docs/en/overview), then use the account-login terminal. Claude runs interactively with its own permission prompts. It reads the same context bundle as GPT, but its terminal output is not automatically ingested into memory; save selected conclusions explicitly.
 
-- 자동 채팅은 최대 3분, 모델은 호환 기본값 gpt-6.1-sol 또는 화면의 명시적 모델 이름을 사용합니다. 앱의 Codex 터미널은 전역 hooks/plugins/MCP를 비활성화하며 기존 사용자 설정 파일은 수정하지 않습니다.
-- API 인증으로 로그인된 CLI는 구독 실행으로 취급하지 않습니다.
-- 모든 계정의 잔여 토큰을 임의로 추정하지 않습니다. 공식 CLI에서 사용량을 확인하세요.
+Subscription limits and billing settings belong to the providers. Eterna does **not** rotate accounts to bypass limits, copy authentication tokens, or silently fall back to paid API calls. Real Claude inference requires your completed login and was not part of the original author's live verification.
 
-## Claude 구독 연결
+## Performance, measured
 
-공식 Claude Code CLI가 필요합니다. `모델 연결 → Claude 구독 계정 로그인`에서 공식 `claude auth login --claudeai`를 실행합니다. 브라우저 인증을 완료한 후 연결 새로고침을 누르세요.
+The performance work targets local UI and data handling, not the model's inference speed. The reproducible fixture uses 500 knowledge records and 400 runs with 100KB contexts each. See the [report and raw results](docs/performance/README.md) for before/after measurements and limitations.
 
-이 앱은 Claude OAuth 토큰을 추출하거나 Claude API로 전달하지 않습니다. Claude Code 문서에서 안내하는 **에디터 내 터미널 실행** 방식으로 공식 CLI를 그대로 사용합니다. Claude는 `--safe-mode --permission-mode manual`로 실행됩니다. 구독 플랜의 실제 권한·한도·추가 사용 설정은 공식 도구에서 확인하세요.
+Heavy editor, language, graph, and terminal modules load on demand. Run summaries are stored separately from full contexts, unchanged state requests return no response body, and hidden tabs stop polling. CI enforces a 110KB gzip budget for the initial JavaScript entry.
 
-Claude에게 넘기는 목표·파일·지식은 GPT와 같은 ContextBundle 생성기를 거칩니다. Claude의 터미널 출력은 비밀 입력이 섞일 수 있어 자동 수집하지 않습니다. 남길 결론은 지식 기록에 직접 저장하세요. 따라서 Claude 결과의 자동 지식 추출은 아직 지원하지 않습니다.
+## Data and boundaries
 
-## 공유와 기억
+Local state lives in `.data/`. The legacy database filename `nexus.sqlite`, storage keys, and `NEXUS_*` environment variables remain compatible with the initial prototype. Back up the database using a SQLite-aware backup or stop the server before copying the whole data directory. Do not commit or share this directory or launch URLs.
 
-- SQLite는 `.data/nexus.sqlite`, AI 작업 사본은 `.data/workspaces`에 저장됩니다.
-- 지식은 모델이 아니라 IDE에 귀속됩니다. GPT와 Claude가 같은 기록·근거를 참조하지만 내부 추론·가중치를 공유하지는 않습니다.
-- 다른 프로젝트 기록은 해당 기록의 `공유 허용`과 실행의 `프로젝트 간 공유 지식 포함`을 모두 켜야 전달됩니다.
-- 후보·확인됨·재검증 필요·대체됨 상태를 구분합니다. 이전 답변도 근거 파일과 지식 버전이 유지되는 경우에만 다시 전달합니다.
-- 관계선은 탐색용이며 현재 검색 순위를 직접 바꾸지 않습니다. 현재 검색은 단어 일치·프로젝트 범위를 사용합니다. 벡터 검색이나 자동 코드 호출 그래프는 아직 없습니다.
+Snapshots support text source files up to 512KB each, fewer than 2,000 files, and 20MB total. Dependencies, secrets, symlinks, and binary assets are excluded. A source snapshot is **not an OS security sandbox**. Official CLI permissions still apply; user-triggered test commands run on the host with the user's privileges.
 
-## 실행 경계
+This is a single-user local application, not a network-exposed multi-tenant service. Graph links are navigational; vector search and automatic call-graph extraction are not implemented. Model switching shares explicit context, not hidden model reasoning or weights.
 
-- 작업 사본은 원본 변경을 격리하는 기능이지 OS 보안 sandbox가 아닙니다. 공식 CLI의 권한 정책을 유지합니다. Claude와 로컬 테스트의 모든 파일 접근을 이 앱이 차단한다고 주장하지 않습니다.
-- 사본은 앱이 읽을 수 있는 512KB 이하 텍스트 파일, 2,000개 미만, 총 20MB 이하를 지원합니다. `node_modules`, 빌드 결과, 비밀 파일, 바이너리, 심볼릭 링크는 제외합니다. 패키지 설치가 필요한 작업은 공식 터미널에서 직접 진행하세요.
-- 임의 셸 명령은 테스트 대화상자의 명시적 실행 버튼을 통해서만 실행합니다. 테스트는 원본에서 실행되므로 변경을 일으킬 수 있습니다.
-- 터미널을 닫으면 프로세스 그룹을 종료합니다. 터미널은 2시간/출력 20MB 제한이 있습니다. 실행 중 적용보다 작업 종료 후 변경 검토를 권장합니다.
-- 자동 다중 구독 계정 rotation은 구현하지 않았습니다. 공식 로그인 계정을 사용하며 한도·인증 오류를 구분해 멈춥니다. API나 크레딧으로 자동 전환하지 않습니다.
-- macOS용이며 외부 서비스 공개 배포나 다중 사용자 서버 용도가 아닙니다.
-
-## 검증
+## Development
 
 ```sh
 npm test
 npm run check
 npm run build
+node scripts/check-bundle.mjs
+npx playwright install chrome
 npm run test:e2e
+npm run benchmark
 ```
 
-E2E는 설치된 Google Chrome을 사용하며 별도 포트·DB·임시 프로젝트에서 편집, diff, 지식/관계, stale 상태, 테스트 실행, 재접속, 모바일 레이아웃을 검사합니다. `node scripts/smoke.mjs`는 실제 ChatGPT 구독 사용량을 소비하는 선택적 검증입니다.
+`npm start` runs in the foreground. `npm run dev` rebuilds once and watches the Node server. `scripts/smoke.mjs` and `scripts/terminal-smoke.mjs` are opt-in live provider probes that consume your subscription allowance.
 
-## 공식 문서
-
-- [Codex CLI](https://developers.openai.com/codex/cli/)
-- [Claude Code: 다른 에디터의 통합 터미널](https://code.claude.com/docs/en/ide-integrations)
-- [Claude 인증 안내](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account)
-
-## 현재 검증 상태 (2026-10-18)
-
-로컬 핵심/API 테스트, TypeScript 검사, 프로덕션 빌드, 실제 Chrome E2E 통과. 실제 ChatGPT 구독 계정과 GPT-6.1-Sol로 선택한 파일에 대한 응답 완료를 확인했습니다. 공식 Codex 터미널의 맥락 파일 읽기, 작업 사본 수정, 브라우저 diff 검토·원본 적용, 적용 후 데모 테스트까지 확인했습니다. 검증용 주석은 확인 후 제거했습니다. Claude Code 설치와 미로그인 상태를 확인했으며, Claude 실제 응답은 소유자의 공식 로그인 완료 후 검증해야 합니다.
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [MIT license](LICENSE). Built by [EternaxCode](https://github.com/EternaxCode).

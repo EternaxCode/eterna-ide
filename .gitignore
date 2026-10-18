@@ -6,3 +6,11 @@ artifacts/
 .DS_Store
 test-results/
 playwright-report/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite-*

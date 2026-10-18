@@ -17,7 +17,22 @@ test('real UI: project, editor, knowledge graph, stale evidence, tests, persiste
  await page.reload();await page.getByRole('button',{name:/지식 그래프/}).click();await expect(page.locator('.note-list')).toContainText('연결된 결정');
  await page.getByRole('button',{name:'작업실',exact:true}).click();await page.getByRole('button',{name:'테스트 실행',exact:true}).click();await page.getByLabel('실행 명령',{exact:true}).fill('node -e "console.log(42)"');await page.getByRole('button',{name:'명령 실행',exact:true}).click();await expect(page.locator('.answer-heading')).toContainText('완료',{timeout:15000});await expect(page.locator('.run-output')).toContainText('42');
  await page.getByRole('button',{name:'전달할 근거 보기'}).click();await expect(page.locator('.context-preview')).not.toContainText('공통 지식 저장과 근거 추적을 검증합니다.');await page.getByRole('button',{name:'닫기',exact:true}).click();
+ await page.getByRole('button',{name:'main.js',exact:true}).click();await expect(page.locator('.cm-content')).toContainText('value = 3');
  await page.screenshot({path:'artifacts/e2e-workspace.png',fullPage:true});
  await page.setViewportSize({width:390,height:844});await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);await page.screenshot({path:'artifacts/mobile.png',fullPage:true});
  expect(errors).toEqual([]);
+});
+test('history pagination is single-flight and old workspaces remain reviewable',async({page})=>{
+ const rows=Array.from({length:300},(_,i)=>({id:'run-'+i,projectId:'p',goal:'Task '+i,kind:'terminal',provider:'codex',status:'session_ended',answer:'',output:'',createdAt:'2026-10-18T00:00:00Z',workspaceId:'workspace-'+i}));
+ const offsets:number[]=[];
+ await page.route('**/api/state',route=>route.fulfill({json:{projects:[{id:'p',name:'Project',path:'/tmp/project'}],notes:[],edges:[],runs:rows.slice(0,100),runCount:300,workspaces:[]}}));
+ await page.route('**/api/providers',route=>route.fulfill({json:[]}));
+ await page.route('**/api/projects/*/files',route=>route.fulfill({json:[]}));
+ await page.route('**/api/runs?offset=*',async route=>{const offset=Number(new URL(route.request().url()).searchParams.get('offset'));offsets.push(offset);await new Promise(r=>setTimeout(r,200));await route.fulfill({json:rows.slice(offset,offset+100)});});
+ await page.route('**/api/runs/run-*',route=>route.fulfill({json:rows.find(r=>route.request().url().endsWith('/'+r.id))}));
+ await page.goto('/#token=e2e-test-token');await page.getByRole('button',{name:'실행 기록',exact:true}).click();
+ await page.getByRole('button',{name:'이전 기록 더 보기'}).evaluate((button:HTMLButtonElement)=>{button.click();button.click();});
+ await expect(page.locator('.run-row')).toHaveCount(200);expect(offsets).toEqual([100]);
+ await page.getByRole('button',{name:'이전 기록 더 보기'}).click();await expect(page.locator('.run-row')).toHaveCount(300);expect(offsets).toEqual([100,200]);
+ await page.locator('.run-row').last().click();await expect(page.getByRole('button',{name:'이 작업의 변경 검토'})).toBeVisible();
 });

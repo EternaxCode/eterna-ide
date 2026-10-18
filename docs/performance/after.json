@@ -1,0 +1,30 @@
+{
+  "fixture": {
+    "notes": 500,
+    "runs": 400,
+    "contextBytesPerRun": 100000
+  },
+  "environment": {
+    "node": "v24.2.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "browser": "Chrome, cold context, external resources blocked, 4x CPU, 40ms latency / 1.5 MBps"
+  },
+  "api": {
+    "p50Ms": 2.8080830000000105,
+    "p95Ms": 7.433042,
+    "bytes": 501324,
+    "unchangedStatus": 304,
+    "unchangedBytes": 0
+  },
+  "browser": {
+    "fcpP50Ms": 596,
+    "workspaceReadyP50Ms": 1417.9642920000006,
+    "initialJsBytes": 262917
+  },
+  "bundle": {
+    "entryBytes": 262917,
+    "entryGzipBytes": 81028,
+    "totalJsBytes": 1245616
+  }
+}

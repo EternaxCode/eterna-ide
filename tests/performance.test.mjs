@@ -1,0 +1,10 @@
+import {DatabaseSync} from 'node:sqlite';
+import {mkdtempSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {Store} from '../server/store.mjs';
+test('history summary does not load full context or workspace baseline',()=>{const s=new Store(':memory:');const r=s.create('run',{status:'completed',answer:'ok',output:'log',context:{id:'bundle',prompt:'secret-context'.repeat(10000)}});const w=s.create('workspace',{path:'/tmp/project',baseline:{'big.js':{content:'x'.repeat(200000)}}});const runs=s.summaries('run');assert.equal(runs[0].contextId,'bundle');assert(!JSON.stringify(runs).includes('secret-context'));assert(!JSON.stringify(s.summaries('workspace')).includes('big.js'));s.update('run',r.id,{answer:'updated'});assert.equal(s.summaries('run')[0].answer,'updated');s.delete('workspace',w.id);assert.equal(s.summaries('workspace').length,0);s.close();});
+test('mutation revision invalidates an otherwise stable snapshot',()=>{const s=new Store(':memory:');const before=s.revision;s.addProject('test','/tmp/test');assert(s.revision>before);const stable=s.revision;s.projects();assert.equal(s.revision,stable);s.close();});
+test('summary migration preserves existing contexts and baseline records',()=>{const path=join(mkdtempSync(join(tmpdir(),'eterna-migration-')),'old.sqlite');const old=new DatabaseSync(path);old.exec('CREATE TABLE records(id TEXT PRIMARY KEY,type TEXT NOT NULL,data TEXT NOT NULL)');old.prepare('INSERT INTO records VALUES(?,?,?)').run('old-run','run',JSON.stringify({id:'old-run',status:'completed',answer:'a',context:{id:'c',prompt:'original'}}));old.prepare('INSERT INTO records VALUES(?,?,?)').run('old-workspace','workspace',JSON.stringify({id:'old-workspace',baseline:{file:{content:'original source'}}}));old.close();const s=new Store(path);assert.equal(s.get('old-run','run').context.prompt,'original');assert.equal(s.summaries('run')[0].contextId,'c');assert.equal(s.get('old-workspace','workspace').baseline.file.content,'original source');assert.equal(s.summaries('workspace')[0].baseline,undefined);s.close();});

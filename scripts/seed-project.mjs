@@ -1,9 +1,9 @@
 import {readFileSync} from 'node:fs';
 const url=new URL(readFileSync('.data/launch-url','utf8'));const token=new URLSearchParams(url.hash.slice(1)).get('token');const request=async(path,body)=>{const r=await fetch(url.origin+'/api'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});if(!r.ok)throw new Error(await r.text());return r.json();};
-const project=await request('/projects',{name:'Nexus IDE',path:process.cwd()});const initial=await request('/state');const records=[
+const project=await request('/projects',{name:'Eterna IDE',path:process.cwd()});const initial=await request('/state');const records=[
  ['모델이 바뀌어도 작업 맥락은 이어진다','목표, 선택한 파일, 공유가 허용된 지식, 유효한 이전 답변을 공통 ContextBundle로 구성합니다. GPT 채팅과 공식 Claude Code 터미널이 같은 생성기를 사용합니다. Claude의 실제 응답은 공식 로그인 후 추가 검증이 필요합니다.','server/context.mjs','decision'],
  ['근거가 바뀌면 다시 확인한다','파일 해시 또는 지식 버전이 달라지면 과거 기록을 재검증 대상으로 처리합니다. 공유를 해제한 기록은 여러 차례 이어진 답변에서도 다시 전달하지 않습니다. 관련 자동 테스트를 통과했습니다.','tests/core.test.mjs','lesson'],
  ['원본은 검토 후에만 변경한다','AI 터미널은 별도의 텍스트 작업 사본에서 실행됩니다. 변경을 파일별로 비교하고 적용할 때 원본과 검토한 사본의 해시를 확인합니다. 원본의 미커밋 작업과 충돌하면 중단합니다.','server/workspaces.mjs','constraint'],
  ['구독 인증은 공식 도구가 담당한다','GPT는 앱에 포함된 공식 Codex CLI와 기존 ChatGPT 로그인을 사용합니다. Claude는 공식 CLI 터미널에서 로그인합니다. API 키 환경 변수를 전달하거나 다른 계정으로 자동 전환하지 않습니다.','server/providers.mjs','decision']
 ];const notes=[];for(const [title,body,sourcePath,kind] of records){notes.push(initial.notes.find(n=>n.projectId===project.id&&n.title===title)||await request('/notes',{projectId:project.id,title,body,sourcePath,kind,status:'verified',shared:true,author:'구현 · 로컬 검증'}));}
-for(const [a,b,label] of [[0,1,'유효성을 확인한다'],[0,3,'공식 연결을 사용한다'],[2,1,'충돌을 검증한다']])if(!initial.edges.some(e=>e.from===notes[a].id&&e.to===notes[b].id))await request('/edges',{from:notes[a].id,to:notes[b].id,label});console.log('Nexus project and four implementation records registered.');
+for(const [a,b,label] of [[0,1,'유효성을 확인한다'],[0,3,'공식 연결을 사용한다'],[2,1,'충돌을 검증한다']])if(!initial.edges.some(e=>e.from===notes[a].id&&e.to===notes[b].id))await request('/edges',{from:notes[a].id,to:notes[b].id,label});console.log('Eterna project and four implementation records registered.');
